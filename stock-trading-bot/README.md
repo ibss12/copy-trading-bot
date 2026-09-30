@@ -62,8 +62,9 @@ Everything lives in `.env` (see `.env.example` for all options):
 
 - `MAX_POSITION_PCT` — max fraction of the portfolio in any one stock (default `0.10` = 10%)
 - `MAX_OPEN_POSITIONS` — max number of stocks held at once
-- `MAX_DAILY_LOSS_PCT` — if the portfolio drops this much from the day's opening value, the bot stops
-  buying for the rest of the day (set `0` to disable). Checked in `before_market_opens` / every iteration.
+- `MAX_DAILY_LOSS_PCT` — if the portfolio drops this much from the previous close, the bot stops buying
+  for the rest of the session; a loss seen at the close blocks buying for the next session (set `0` to
+  disable). Checked every iteration and in `after_market_closes`, so it also works in daily backtests.
 - `LIQUIDATE_ON_DAILY_LOSS=true` — additionally sell everything when the daily loss limit is hit
 - `PRICE_ALERT_PCTS` — log an alert when a stock moves this much in a day in percent (default `5,10`)
 
@@ -120,7 +121,8 @@ Uses Lumibot's `YahooDataBacktesting` (free, no keys needed) and prints total re
 Sharpe, and max drawdown vs. SPY. Trade logs and stats are written to `logs/`.
 
 In `smart_money` backtests a signal is only used once its public **disclosure date** has passed, so there
-is no look-ahead. 13F data goes back years; Form 4 data is fetched for the last ~150 filings per person.
+is no look-ahead. 13F data goes back years (all quarters since the backtest start); Form 4 data is fetched for the last
+~150 filings per person.
 
 ## 5. Run live (paper)
 

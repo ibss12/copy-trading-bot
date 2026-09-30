@@ -5,6 +5,7 @@ EDGAR fair-access rules: https://www.sec.gov/os/accessing-edgar-data
 
 import json
 import logging
+import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass
@@ -213,13 +214,12 @@ class SecEdgarClient:
 
     # --- 13F -----------------------------------------------------------------
 
-    def thirteenf_signals(self, cik: int, trader_label: str, since: date, max_filings: int) -> list[TraderSignal]:
-        """Buys/sells inferred by diffing consecutive quarterly 13F-HR holdings reports."""
-        filings = self.filings(cik, {"13F-HR"}, date.min, max_filings + 1)
-        filings = [
-            f for i, f in enumerate(filings) if f.filed_on >= since or (i > 0 and filings[i - 1].filed_on >= since)
-        ]
-        holdings = [(filing, self._holdings(filing)) for filing in reversed(filings)]
+    def thirteenf_signals(self, cik: int, trader_label: str, since: date) -> list[TraderSignal]:
+        """Buys/sells inferred by diffing consecutive quarterly 13F-HR holdings reports filed since `since`."""
+        filings = self.filings(cik, {"13F-HR"}, date.min, sys.maxsize)
+        in_range = sum(1 for f in filings if f.filed_on >= since)
+        filings = filings[: in_range + 1]
+        holdings = [(filing, h) for filing in reversed(filings) if (h := self._holdings(filing)) is not None]
 
         changes = []
         for (_, before), (filing, after) in zip(holdings, holdings[1:]):
@@ -255,13 +255,19 @@ class SecEdgarClient:
             )
         return signals
 
-    def _holdings(self, filing: Filing) -> dict[str, Holding]:
+    def _holdings(self, filing: Filing) -> dict[str, Holding] | None:
         index = self.http.get_json(f"{filing.folder_url}/index.json")
         names = [item["name"] for item in index["directory"]["item"]]
-        info_tables = [n for n in names if n.lower().endswith(".xml") and n.lower() != "primary_doc.xml"]
-        if not info_tables:
-            return {}
-        root = ET.fromstring(self.http.get_text(f"{filing.folder_url}/{info_tables[0]}"))
+        candidates = [n for n in names if n.lower().endswith(".xml") and n.lower() != "primary_doc.xml"]
+        root = None
+        for name in candidates:
+            document = ET.fromstring(self.http.get_text(f"{filing.folder_url}/{name}"))
+            if any(_local(element.tag) == "infoTable" for element in document.iter()):
+                root = document
+                break
+        if root is None:
+            logger.warning("No 13F information table found in %s - skipping filing", filing.folder_url)
+            return None
 
         shares: dict[str, float] = defaultdict(float)
         issuer_names: dict[str, str] = {}

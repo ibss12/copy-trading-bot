@@ -10,7 +10,6 @@ from signals.sec_edgar import SecEdgarClient
 logger = logging.getLogger(__name__)
 
 MAX_FORM4_FILINGS_PER_FILER = 150
-MAX_13F_FILINGS_PER_FUND = 12
 
 
 class SignalFeed:
@@ -56,7 +55,7 @@ def load_signal_feed(watchlist: list[str], since: date) -> SignalFeed:
     for fund in config.FOLLOW_FUNDS:
         signals += _collect(
             fund.label,
-            lambda fund=fund: sec.thirteenf_signals(fund.cik, fund.label, since, MAX_13F_FILINGS_PER_FUND),
+            lambda fund=fund: sec.thirteenf_signals(fund.cik, fund.label, since),
         )
 
     for insider in config.FOLLOW_INSIDERS:

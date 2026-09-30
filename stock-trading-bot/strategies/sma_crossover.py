@@ -27,8 +27,10 @@ class SmaCrossover(Strategy):
     Risk controls:
       * `max_position_pct`: max fraction of portfolio value per stock.
       * `max_open_positions`: cap on the number of stocks held at once.
-      * `max_daily_loss_pct`: once the portfolio is down this much versus the start of the
-        day, no new buys are placed until the next day (optionally liquidates everything).
+      * `max_daily_loss_pct`: once the portfolio is down this much versus the previous close,
+        no new buys are placed for the rest of the session (optionally liquidates everything).
+        A loss detected at the close halts buying for the next session, so the guard also
+        works with daily (1D) cadences where no intraday iteration happens.
     """
 
     parameters = {
@@ -52,11 +54,17 @@ class SmaCrossover(Strategy):
         self.long_window = int(self.parameters["sma_long_window"])
         self.trading_day: date | None = None
         self.day_start_value = 0.0
+        self.last_close_value = 0.0
         self.halted_for_day = False
+        self.halt_next_day = False
         self.alerts_sent: set[tuple[str, float]] = set()
 
     def before_market_opens(self):
         self._start_new_day()
+
+    def after_market_closes(self):
+        self._check_daily_loss(at_close=True)
+        self.last_close_value = float(self.get_portfolio_value())
 
     def on_trading_iteration(self):
         if self.get_datetime().date() != self.trading_day:
@@ -141,19 +149,26 @@ class SmaCrossover(Strategy):
 
     def _start_new_day(self) -> None:
         self.trading_day = self.get_datetime().date()
-        self.day_start_value = float(self.get_portfolio_value())
-        self.halted_for_day = False
+        self.day_start_value = self.last_close_value or float(self.get_portfolio_value())
+        self.halted_for_day = self.halt_next_day
+        self.halt_next_day = False
         self.alerts_sent.clear()
+        if self.halted_for_day:
+            self.log_message("Daily loss limit hit at the last close: no new buys this session", color="red")
 
-    def _check_daily_loss(self) -> None:
+    def _check_daily_loss(self, at_close: bool = False) -> None:
         limit = float(self.parameters["max_daily_loss_pct"])
-        if limit <= 0 or self.halted_for_day or self.day_start_value <= 0:
+        if limit <= 0 or self.day_start_value <= 0 or (self.halted_for_day and not at_close):
             return
         loss = 1 - float(self.get_portfolio_value()) / self.day_start_value
         if loss < limit:
             return
-        self.halted_for_day = True
-        self.log_message(f"Daily loss {loss:.2%} hit limit {limit:.2%}: no new buys today", color="red")
+        if at_close:
+            self.halt_next_day = True
+            self.log_message(f"Daily loss {loss:.2%} hit limit {limit:.2%}: no new buys next session", color="red")
+        else:
+            self.halted_for_day = True
+            self.log_message(f"Daily loss {loss:.2%} hit limit {limit:.2%}: no new buys today", color="red")
         if self.parameters["liquidate_on_daily_loss"]:
             self.sell_all()
 

@@ -31,10 +31,13 @@ class SmartMoneySma(SmaCrossover):
             if history_start
             else self.get_datetime().date() - timedelta(days=self.lookback_days)
         )
-        self.log_message(f"Loading smart-money disclosures since {since}...")
-        self.feed: SignalFeed = load_signal_feed(self.symbols, since)
-        self.log_message(f"Loaded {len(self.feed.signals)} smart-money signals")
+        self._load_feed(since)
         self.scores: dict[str, int] = {}
+
+    def before_market_opens(self):
+        super().before_market_opens()
+        if not self.is_backtesting:
+            self._load_feed(self.get_datetime().date() - timedelta(days=self.lookback_days))
 
     def on_trading_iteration(self):
         self.scores = self.feed.net_scores(self.get_datetime().date(), self.lookback_days)
@@ -59,6 +62,11 @@ class SmartMoneySma(SmaCrossover):
             self.buy(symbol, signal.price, f"followed traders buying: {self._who(symbol, 'buy')}")
         elif signal.crossed_up and symbol in self.symbols and score >= 0:
             self.buy(symbol, signal.price, "SMA bullish crossover")
+
+    def _load_feed(self, since: date) -> None:
+        self.log_message(f"Loading smart-money disclosures since {since}...")
+        self.feed: SignalFeed = load_signal_feed(self.symbols, since)
+        self.log_message(f"Loaded {len(self.feed.signals)} smart-money signals")
 
     def _who(self, symbol: str, action: str) -> str:
         reasons = self.feed.reasons(symbol, self.get_datetime().date(), self.lookback_days)
