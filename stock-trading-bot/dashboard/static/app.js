@@ -444,7 +444,7 @@ function renderChartHeader() {
   if (q.advice) {
     trend.className = "badge advice " + ADVICE[q.advice.action][1];
     trend.textContent = q.advice.headline;
-    trend.title = q.advice.reasons.join("\n");
+    trend.title = q.advice.headline + "\n" + q.advice.reasons.join("\n");
   } else {
     trend.className = "badge " + (q.trend || "neutral");
     trend.textContent = q.trend === "up" ? "▲ Uptrend (bot: hold/buy)" : q.trend === "down" ? "▼ Downtrend (bot: stay out)" : "";
