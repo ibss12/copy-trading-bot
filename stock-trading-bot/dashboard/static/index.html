@@ -51,7 +51,7 @@
   <section class="kpis" id="kpis"></section>
 
   <main class="grid">
-    <section class="panel watchlist-panel">
+    <section class="panel watchlist-panel" data-panel="watchlist">
       <div class="panel-head">
         <h2>Watchlist</h2>
         <form id="add-symbol" class="add-symbol">
@@ -61,13 +61,13 @@
       </div>
       <div class="table-wrap">
         <table class="watchlist">
-          <thead><tr><th>Symbol</th><th class="r">Price</th><th class="r">Today</th><th>Intraday</th><th>Signal</th><th></th></tr></thead>
+          <thead><tr><th>Symbol</th><th class="r">Price</th><th class="r">Today</th><th>Intraday</th><th>Signal</th><th class="dcol r">Open</th><th class="dcol r">High</th><th class="dcol r">Low</th><th class="dcol r">Prev close</th><th class="dcol r">Volume</th><th class="dcol r">20-day avg</th><th class="dcol r">50-day avg</th><th class="dcol r">vs 50-day</th><th></th></tr></thead>
           <tbody id="watchlist-body"></tbody>
         </table>
       </div>
     </section>
 
-    <section class="panel chart-panel">
+    <section class="panel chart-panel" data-panel="chart">
       <div class="panel-head chart-head">
         <div>
           <div class="chart-title"><span id="chart-symbol">&mdash;</span> <span id="chart-trend" class="badge"></span></div>
@@ -77,27 +77,32 @@
           <button data-range="1D" class="active">1D</button><button data-range="5D">5D</button><button data-range="1M">1M</button><button data-range="6M">6M</button><button data-range="1Y">1Y</button><button data-range="2Y">2Y</button>
         </div>
       </div>
-      <div class="chart-box">
-        <canvas id="chart"></canvas>
-        <div id="chart-tip" class="chart-tip hidden"></div>
-        <div id="chart-loading" class="chart-loading">Loading chart&hellip;</div>
-      </div>
-      <div class="chart-legend" id="chart-legend"></div>
-      <div class="stats" id="chart-stats"></div>
-      <div class="trade-bar">
-        <div class="trade-left">
-          <label class="muted small" for="trade-qty">Shares</label>
-          <input id="trade-qty" type="number" min="1" step="1" value="1" />
-          <button id="btn-buy" class="btn buy">Buy</button>
-          <button id="btn-sell" class="btn sell">Sell</button>
+      <div class="chart-body">
+        <div class="chart-main">
+          <div class="chart-box">
+            <canvas id="chart"></canvas>
+            <div id="chart-tip" class="chart-tip hidden"></div>
+            <div id="chart-loading" class="chart-loading">Loading chart&hellip;</div>
+          </div>
+          <div class="chart-legend" id="chart-legend"></div>
+          <div class="stats" id="chart-stats"></div>
+          <div class="trade-bar">
+            <div class="trade-left">
+              <label class="muted small" for="trade-qty">Shares</label>
+              <input id="trade-qty" type="number" min="1" step="1" value="1" />
+              <button id="btn-buy" class="btn buy">Buy</button>
+              <button id="btn-sell" class="btn sell">Sell</button>
+            </div>
+            <button id="btn-price-alert" class="btn ghost">
+              <svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg> Set price alert
+            </button>
+          </div>
         </div>
-        <button id="btn-price-alert" class="btn ghost">
-          <svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg> Set price alert
-        </button>
+        <aside id="chart-details" class="details"></aside>
       </div>
     </section>
 
-    <section class="panel alerts-panel">
+    <section class="panel alerts-panel" data-panel="alerts">
       <div class="panel-head">
         <h2>Alerts <span id="unread" class="count hidden">0</span></h2>
         <div class="head-actions">
@@ -115,16 +120,17 @@
       <div id="alerts-list" class="alerts-list"></div>
     </section>
 
-    <section class="panel traders-panel">
+    <section class="panel traders-panel" data-panel="traders">
       <div class="panel-head">
         <h2>Big-trader moves</h2>
         <button id="btn-refresh-signals" class="btn ghost sm">Refresh</button>
       </div>
       <div id="follows" class="follows"></div>
+      <div id="scores" class="scores"></div>
       <div id="signals-list" class="signals-list"></div>
     </section>
 
-    <section class="panel positions-panel">
+    <section class="panel positions-panel" data-panel="positions">
       <div class="panel-head">
         <div class="tabs" id="pos-tabs">
           <button data-tab="positions" class="active">Positions</button>
@@ -135,7 +141,7 @@
       <div id="positions-body" class="table-wrap"></div>
     </section>
 
-    <section class="panel bot-panel">
+    <section class="panel bot-panel" data-panel="bot">
       <div class="panel-head">
         <h2>Trading bot</h2>
         <span id="bot-pill" class="pill">Stopped</span>
@@ -153,6 +159,7 @@
     </section>
   </main>
 
+  <div id="focus-backdrop" class="focus-backdrop hidden"></div>
   <div id="toasts" class="toasts"></div>
 
   <div id="modal" class="modal hidden">

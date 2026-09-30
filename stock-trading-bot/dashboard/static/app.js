@@ -21,6 +21,8 @@ const S = {
   lastSeenAlertId: Number(localStorage.getItem("cc.lastSeenAlert") || 0),
   popups: localStorage.getItem("cc.popups") !== "off",
   sound: localStorage.getItem("cc.sound") !== "off",
+  focus: null,
+  history: {},
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -71,6 +73,9 @@ const ICONS = {
   system: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>',
   bell: '<svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg>',
   trash: '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
+  expand: '<svg viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>',
+  collapse: '<svg viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>',
+  popout: '<svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
 };
 
 // ---------- sound + notifications ----------
@@ -215,6 +220,14 @@ function signalBadges(q) {
   return html;
 }
 
+function detailValues(q) {
+  const vs = q.sma_long ? (q.price / q.sma_long - 1) * 100 : null;
+  return [money(q.open), money(q.day_high), money(q.day_low), money(q.prev_close), compact(q.volume), money(q.sma_short), money(q.sma_long), `<span class="${cls(vs)}">${pct(vs, 1)}</span>`];
+}
+function detailCells(q) {
+  return detailValues(q).map((v, i) => `<td class="dcol r" data-dc="${q.symbol}-${i}">${v}</td>`).join("");
+}
+
 function watchRow(sym) {
   const q = S.quotes[sym];
   if (!q) return "";
@@ -224,6 +237,7 @@ function watchRow(sym) {
     <td class="r"><span class="chg ${cls(q.change_pct)}" data-chg="${sym}">${pct(q.change_pct)}</span></td>
     <td data-spark="${sym}">${sparkSvg(q.spark, q.prev_close)}</td>
     <td data-sig="${sym}">${signalBadges(q)}</td>
+    ${detailCells(q)}
     <td><div class="row-actions">
       <button data-act="alert" title="Set price alert">${ICONS.bell}</button>
       <button data-act="remove" title="Remove from watchlist">${ICONS.trash}</button></div></td></tr>`;
@@ -231,7 +245,7 @@ function watchRow(sym) {
 
 function renderWatchlist() {
   const body = $("#watchlist-body");
-  body.innerHTML = S.watchlist.length ? S.watchlist.map(watchRow).join("") : `<tr><td colspan="6" class="empty">Add a ticker above to start watching it.</td></tr>`;
+  body.innerHTML = S.watchlist.length ? S.watchlist.map(watchRow).join("") : `<tr><td colspan="14" class="empty">Add a ticker above to start watching it.</td></tr>`;
 }
 
 function updateWatchRow(q, oldPrice) {
@@ -250,6 +264,7 @@ function updateWatchRow(q, oldPrice) {
   chg.className = "chg " + cls(q.change_pct);
   document.querySelector(`[data-spark="${sym}"]`).innerHTML = sparkSvg(q.spark, q.prev_close);
   document.querySelector(`[data-sig="${sym}"]`).innerHTML = signalBadges(q);
+  if (S.focus === "watchlist") detailValues(q).forEach((v, i) => { const c = document.querySelector(`[data-dc="${sym}-${i}"]`); if (c) c.innerHTML = v; });
 }
 
 // ---------- chart ----------
@@ -389,6 +404,7 @@ canvas.addEventListener("mousemove", (e) => {
 });
 canvas.addEventListener("mouseleave", () => { hoverIndex = null; drawChart(); });
 window.addEventListener("resize", () => drawChart());
+if ("ResizeObserver" in window) new ResizeObserver(() => drawChart()).observe(canvas);
 
 function liveChartTick(q) {
   const d = S.chart;
@@ -420,12 +436,140 @@ function renderChartHeader() {
 
 function selectSymbol(sym) {
   if (!S.quotes[sym]) return;
+  if (S.focus && S.focus !== "chart" && S.focus !== "bot") setFocus("chart");
   S.selected = sym;
   localStorage.setItem("cc.selected", sym);
   document.querySelectorAll(".watchlist tr").forEach((r) => r.classList.toggle("selected", r.dataset.sym === sym));
   S.chart = null; hoverIndex = null;
   renderChartHeader();
   loadChart();
+  renderChartDetails(true);
+}
+
+// ---------- full-page panels ----------
+const PANEL_NAMES = { watchlist: "Watchlist", chart: "Chart", alerts: "Alerts", traders: "Big-trader moves", positions: "Positions", bot: "Trading bot" };
+
+function addPanelTools() {
+  document.querySelectorAll(".panel[data-panel]").forEach((panel) => {
+    const name = panel.dataset.panel;
+    const tools = el(`<div class="panel-tools">
+      <button class="tool-btn" data-popout="${name}" title="Open ${PANEL_NAMES[name]} in a new window">${ICONS.popout}</button>
+      <button class="tool-btn" data-expand="${name}" title="Full page">${ICONS.expand}</button></div>`);
+    panel.querySelector(".panel-head").appendChild(tools);
+  });
+  document.addEventListener("click", (e) => {
+    const ex = e.target.closest("[data-expand]");
+    if (ex) return setFocus(S.focus === ex.dataset.expand ? null : ex.dataset.expand);
+    const po = e.target.closest("[data-popout]");
+    if (po) {
+      window.open(`${location.pathname}#full=${po.dataset.popout}`, `cc-${po.dataset.popout}`, "width=1280,height=860");
+      if (S.focus === po.dataset.popout) setFocus(null);
+    }
+  });
+  $("#focus-backdrop").onclick = () => setFocus(null);
+  document.querySelectorAll(".panel-head h2, .chart-title").forEach((h) => {
+    h.title = "Double-click for full page";
+    h.addEventListener("dblclick", () => { const p = h.closest(".panel").dataset.panel; setFocus(S.focus === p ? null : p); });
+  });
+}
+
+function setFocus(name) {
+  if (name && !PANEL_NAMES[name]) name = null;
+  S.focus = name;
+  document.documentElement.style.setProperty("--topbar-h", $(".topbar").offsetHeight + "px");
+  document.querySelectorAll(".panel[data-panel]").forEach((p) => {
+    const on = p.dataset.panel === name;
+    p.classList.toggle("expanded", on);
+    const b = p.querySelector("[data-expand]");
+    b.innerHTML = on ? ICONS.collapse : ICONS.expand;
+    b.title = on ? "Back to dashboard (Esc)" : "Full page";
+  });
+  document.body.classList.toggle("focus-mode", !!name);
+  $("#focus-backdrop").classList.toggle("hidden", !name);
+  const hash = name ? `#full=${name}` : "";
+  if (location.hash !== hash) history.replaceState(null, "", location.pathname + location.search + hash);
+  if (name === "watchlist") renderWatchlist();
+  if (name === "chart") renderChartDetails(true);
+  requestAnimationFrame(drawChart);
+}
+
+function focusFromHash() {
+  const m = location.hash.match(/full=(\w+)/);
+  setFocus(m ? m[1] : null);
+}
+window.addEventListener("hashchange", focusFromHash);
+
+async function loadHistory(sym) {
+  const cached = S.history[sym];
+  if (cached && Date.now() - cached.at < 30 * 60000) return cached.data;
+  const data = await api(`/api/chart/${sym}?range=2Y`);
+  S.history[sym] = { at: Date.now(), data };
+  return data;
+}
+
+function lastCross(d) {
+  const a = d.sma_short, b = d.sma_long;
+  if (!a || !b) return null;
+  for (let i = d.c.length - 1; i > 0; i--) {
+    if ([a[i], b[i], a[i - 1], b[i - 1]].some((v) => v == null)) break;
+    const now = a[i] > b[i], before = a[i - 1] > b[i - 1];
+    if (now !== before) return { up: now, t: d.t[i], price: d.c[i] };
+  }
+  return null;
+}
+
+let detailsTimer = 0;
+async function renderChartDetails(force = false) {
+  if (S.focus !== "chart" || !S.selected) return;
+  if (!force && Date.now() - detailsTimer < 2000) return;
+  detailsTimer = Date.now();
+  const sym = S.selected, q = S.quotes[sym];
+  const box = $("#chart-details");
+  let d = S.history[sym]?.data;
+  if (!d) {
+    box.innerHTML = `<div class="empty">Loading details…</div>`;
+    try { d = await loadHistory(sym); } catch (e) { box.innerHTML = `<div class="empty">Couldn't load history: ${esc(e.message)}</div>`; return; }
+    if (sym !== S.selected) return;
+  }
+  const price = q.price, closes = d.c, n = closes.length;
+  const back = (days) => { const cutoff = Date.now() - days * 86400000; const i = d.t.findIndex((t) => t >= cutoff); return i >= 0 ? closes[i] : null; };
+  const perf = [["1 week", 7], ["1 month", 30], ["3 months", 91], ["6 months", 182], ["1 year", 365], ["2 years", 730]]
+    .map(([k, days]) => { const p = back(days); const r = p ? (price / p - 1) * 100 : null; return `<div><div class="k">${k}</div><div class="v ${cls(r)}">${pct(r, 1)}</div></div>`; }).join("");
+  const year = closes.slice(Math.max(0, n - 252));
+  const hi = Math.max(...year, price), lo = Math.min(...year, price);
+  const posPct = hi > lo ? ((price - lo) / (hi - lo)) * 100 : 50;
+  const cross = lastCross(d);
+  const gap = q.sma_long ? (q.sma_short / q.sma_long - 1) * 100 : null;
+  const botText = q.trend === "up"
+    ? `The ${d.short_window}-day average (${money(q.sma_short)}) is <b class="up">above</b> the ${d.long_window}-day (${money(q.sma_long)}), ${pct(gap, 1)} apart. The bot would <b>buy or hold</b> ${sym}.`
+    : q.trend === "down"
+      ? `The ${d.short_window}-day average (${money(q.sma_short)}) is <b class="down">below</b> the ${d.long_window}-day (${money(q.sma_long)}), ${pct(gap, 1)} apart. The bot would <b>stay out or sell</b> ${sym}.`
+      : "Not enough history yet to compute the averages.";
+  const crossText = cross ? `Last crossover: <b class="${cross.up ? "up" : "down"}">${cross.up ? "bullish (buy)" : "bearish (sell)"}</b> on ${new Date(cross.t).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })} at ${money(cross.price)} (${pct((price / cross.price - 1) * 100, 1)} since).` : "";
+  const score = (S.signals.scores || {})[sym];
+  const sigs = (S.signals.signals || []).filter((s) => s.symbol === sym);
+  const alerts = S.alerts.filter((a) => a.symbol === sym).slice(0, 8);
+  const pos = (S.account.positions || []).find((p) => p.symbol === sym);
+  const rules = (S.settings.price_alerts || []).filter((r) => r.symbol === sym && !r.triggered);
+  box.innerHTML = `
+    <h4>Performance</h4><div class="kv">${perf}</div>
+    <h4>52-week range</h4>
+    <div class="range-bar"><i style="left:${posPct.toFixed(1)}%"></i></div>
+    <div class="range-ends"><span>${money(lo)}</span><span>${pct((price / hi - 1) * 100, 1)} from high</span><span>${money(hi)}</span></div>
+    <h4>What the bot sees</h4><div class="explain">${botText}${crossText ? "<br>" + crossText : ""}</div>
+    ${pos ? `<h4>Your position</h4><div class="kv">
+      <div><div class="k">Shares</div><div class="v">${pos.qty}</div></div>
+      <div><div class="k">Avg cost</div><div class="v">${money(pos.avg_entry_price)}</div></div>
+      <div><div class="k">Value</div><div class="v">${money(pos.market_value)}</div></div>
+      <div><div class="k">Total P/L</div><div class="v ${cls(pos.unrealized_pl)}">${signedMoney(pos.unrealized_pl)}</div></div>
+      <div><div class="k">Return</div><div class="v ${cls(pos.unrealized_plpc)}">${pct(pos.unrealized_plpc)}</div></div>
+      <div><div class="k">Weight</div><div class="v">${pos.weight_pct.toFixed(1)}%</div></div></div>` : ""}
+    <h4>Big traders${score ? ` <span class="badge star">★ ${score > 0 ? "+" : ""}${score}</span>` : ""}</h4>
+    <div class="mini-list">${sigs.length ? sigs.slice(0, 8).map((s) => `<div class="mini"><span class="${s.action === "buy" ? "up" : "down"}"><b>${s.action.toUpperCase()}</b></span> · <b>${esc(s.trader)}</b><br>${esc(s.detail)}<br><span class="muted">${esc(s.source)} · disclosed ${dayAgo(s.disclosed_on)}</span></div>`).join("") : `<div class="mini muted">No recent filings from the people you follow mention ${sym}.</div>`}</div>
+    <h4>Price alerts</h4>
+    <div class="mini-list">${rules.length ? rules.map((r) => `<div class="mini">${r.op} <b>${money(r.price)}</b> <span class="muted">(${pct((r.price / price - 1) * 100, 1)} away)</span></div>`).join("") : `<div class="mini muted">None set. Use “Set price alert” to get a pop-up at your price.</div>`}</div>
+    <h4>Recent alerts</h4>
+    <div class="mini-list">${alerts.length ? alerts.map((a) => `<div class="mini"><b>${esc(a.title)}</b><br>${esc(a.message)}<br><span class="muted">${new Date(a.ts).toLocaleString()}</span></div>`).join("") : `<div class="mini muted">No alerts for ${sym} yet.</div>`}</div>`;
 }
 
 // ---------- alerts ----------
@@ -436,7 +580,7 @@ function renderAlerts() {
   $("#alerts-list").innerHTML = list.length ? list.slice(0, 150).map((a) => `
     <div class="alert ${esc(a.level)} ${a.id > S.lastSeenAlertId ? "unread" : ""}" data-sym="${esc(a.symbol || "")}">
       <div class="ico">${ICONS[a.category] || ICONS.system}</div>
-      <div style="min-width:0"><div class="t">${esc(a.title)}</div><div class="m">${esc(a.message)}</div></div>
+      <div style="min-width:0"><div class="t">${esc(a.title)}</div><div class="m">${esc(a.message)}</div><div class="full-time">${new Date(a.ts).toLocaleString()}</div></div>
       <div class="time" data-ts="${a.ts}">${ago(a.ts)}</div></div>`).join("")
     : `<div class="empty">No alerts yet. You'll be alerted about big price moves, buy/sell signals, big-trader filings and trades.</div>`;
   S.unread = S.alerts.filter((a) => a.id > S.lastSeenAlertId).length;
@@ -449,6 +593,7 @@ function onAlert(a) {
   S.alerts.unshift(a);
   S.alerts = S.alerts.slice(0, 300);
   renderAlerts();
+  if (a.symbol === S.selected) renderChartDetails(true);
   toast(a);
   beep(a.level);
   if (document.hidden || S.popups) desktopPopup(a);
@@ -459,6 +604,8 @@ function renderSignals() {
   const sig = S.signals;
   $("#follows").innerHTML = (S.config.follows || []).map((f) => `<span class="badge neutral">${esc(f)}</span>`).join("")
     + (S.config.quiver_enabled ? "" : ` <span class="badge neutral" title="Add QUIVER_API_KEY to .env to follow Nancy Pelosi and other members of Congress">+ Congress (needs Quiver key)</span>`);
+  const scores = Object.entries(sig.scores || {}).filter(([, v]) => v).sort((a, b) => b[1] - a[1]);
+  $("#scores").innerHTML = scores.length ? `<span class="muted small" style="align-self:center">Net buys − sells, last ${sig.lookback_days || 45} days:</span>` + scores.map(([sym, v]) => `<span class="score-chip" data-sym="${esc(sym)}"><b>${esc(sym)}</b><span class="${cls(v)}">${v > 0 ? "+" : ""}${v}</span></span>`).join("") : "";
   const list = sig.signals || [];
   if (sig.loading && !list.length) { $("#signals-list").innerHTML = `<div class="empty">Checking SEC filings for new moves…</div>`; return; }
   if (sig.error) { $("#signals-list").innerHTML = `<div class="empty">Couldn't load filings: ${esc(sig.error)}</div>`; return; }
@@ -542,7 +689,11 @@ function openModal(title, bodyHtml, buttons) {
 }
 function closeModal() { $("#modal").classList.add("hidden"); }
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal" || e.target.closest("[data-close]")) closeModal(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!$("#modal").classList.contains("hidden")) closeModal();
+  else if (S.focus) setFocus(null);
+});
 
 function priceAlertModal(sym) {
   const q = S.quotes[sym] || {};
@@ -670,6 +821,7 @@ $("#ranges").addEventListener("click", (e) => {
 
 $("#tape").addEventListener("click", (e) => { const t = e.target.closest("[data-sym]"); if (t) selectSymbol(t.dataset.sym); });
 $("#alerts-list").addEventListener("click", (e) => { const a = e.target.closest("[data-sym]"); if (a?.dataset.sym && S.quotes[a.dataset.sym]) selectSymbol(a.dataset.sym); });
+$("#scores").addEventListener("click", (e) => { const c = e.target.closest("[data-sym]"); if (c) $(`#signals-list [data-sym="${c.dataset.sym}"]`)?.click(); });
 $("#signals-list").addEventListener("click", async (e) => {
   const s = e.target.closest("[data-sym]");
   if (!s) return;
@@ -746,14 +898,14 @@ function connect() {
       const old = S.quotes[q.symbol];
       S.quotes[q.symbol] = q;
       if (S.watchlist.includes(q.symbol)) updateWatchRow(q, old?.price);
-      if (q.symbol === S.selected) { renderChartHeader(); liveChartTick(q); }
+      if (q.symbol === S.selected) { renderChartHeader(); liveChartTick(q); renderChartDetails(); }
     }
     renderTape();
   });
   es.addEventListener("alert", (e) => onAlert(JSON.parse(e.data)));
   es.addEventListener("market", (e) => { S.market = JSON.parse(e.data); renderMarket(); });
   es.addEventListener("account", (e) => { S.account = JSON.parse(e.data); renderKpis(); renderPositions(); renderChartHeader(); });
-  es.addEventListener("signals", (e) => { S.signals = JSON.parse(e.data); renderSignals(); renderWatchlist(); });
+  es.addEventListener("signals", (e) => { S.signals = JSON.parse(e.data); renderSignals(); renderWatchlist(); renderChartDetails(true); });
   es.addEventListener("bot", (e) => { S.bot = JSON.parse(e.data); renderBot(); renderKpis(); });
   es.addEventListener("bot_log", (e) => appendLog(JSON.parse(e.data)));
   es.addEventListener("settings", (e) => { S.settings = JSON.parse(e.data); });
@@ -771,6 +923,8 @@ async function init() {
   updateNotifyUi(); renderMarket(); renderTape(); renderKpis(); renderWatchlist(); renderAlerts(); renderSignals(); renderPositions(); renderBot();
   const saved = localStorage.getItem("cc.selected");
   selectSymbol(S.quotes[saved] ? saved : S.watchlist[0] || S.indexes[0]);
+  addPanelTools();
+  focusFromHash();
   connect();
   setInterval(() => { renderCountdown(); document.querySelectorAll(".alert .time").forEach((t) => (t.textContent = ago(Number(t.dataset.ts)))); }, 15000);
 }

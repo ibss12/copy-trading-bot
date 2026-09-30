@@ -162,6 +162,12 @@ A live dashboard for everything above. It runs on your machine only (listens on 
   positions, open orders and recent fills (refreshed every few seconds). You can place paper market
   orders, cancel orders, and close positions from the dashboard.
 - **Bot controls:** start/stop `run_live.py` (SMA only, or smart money + SMA) and watch its log live.
+- **Full-page view:** every panel has an expand button (or double-click its title) that opens it full
+  page with more detail. The chart gets 1-week to 2-year performance, the 52-week range, what the bot
+  sees (averages and last crossover), big-trader filings, price alerts and recent alerts for that stock.
+  The watchlist adds open/high/low/volume and average columns. The pop-out button opens a panel in its
+  own window (e.g. chart on a second monitor), and `http://localhost:8000/#full=chart` links straight
+  to it. Press Esc to go back.
 
 Without Alpaca keys, live prices, charts, big-trader moves and alerts still work; account and bot
 sections show setup steps instead.

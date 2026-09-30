@@ -224,6 +224,46 @@ input:focus, select:focus { border-color: var(--blue); }
 .summary { background: #0b1220; border-radius: 10px; padding: 12px; font-size: 14px; }
 .summary b { font-size: 18px; }
 
+/* full-page panels */
+.panel-head h2, .chart-title { user-select: none; }
+.panel-tools { display: flex; gap: 4px; margin-left: auto; }
+.tool-btn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; flex-shrink: 0; }
+.tool-btn:hover { color: var(--text); border-color: #334155; background: var(--panel-2); }
+.tool-btn svg { width: 15px; height: 15px; }
+.focus-backdrop { position: fixed; inset: 0; z-index: 18; background: rgba(3, 6, 12, 0.72); backdrop-filter: blur(3px); }
+body.focus-mode { overflow: hidden; }
+.panel.expanded { position: fixed; top: calc(var(--topbar-h, 62px) + 14px); left: 20px; right: 20px; bottom: 20px; height: auto; z-index: 19; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6); animation: expand 0.18s ease; }
+@keyframes expand { from { transform: scale(0.98); opacity: 0.4; } to { transform: none; opacity: 1; } }
+.chart-body { display: flex; flex: 1; min-height: 0; }
+.chart-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.details, .scores, .dcol, .full-time { display: none; }
+.panel.expanded .dcol { display: table-cell; }
+.panel.expanded .full-time { display: block; }
+.panel.expanded .details { display: block; width: 380px; flex-shrink: 0; overflow-y: auto; border-left: 1px solid var(--line); padding: 0 16px 16px; }
+.panel.expanded .chart-price { font-size: 34px; }
+.details h4 { margin: 16px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.kv > div { background: var(--panel-2); border-radius: 10px; padding: 8px 10px; }
+.kv .k { font-size: 11px; color: var(--muted); }
+.kv .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+.range-bar { position: relative; height: 8px; border-radius: 999px; background: linear-gradient(90deg, var(--red), var(--amber), var(--green)); margin: 10px 0 6px; }
+.range-bar i { position: absolute; top: -4px; width: 4px; height: 16px; border-radius: 2px; background: #fff; box-shadow: 0 0 0 2px var(--bg); transform: translateX(-2px); }
+.range-ends { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.explain { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; font-size: 13px; line-height: 1.5; }
+.mini-list { display: flex; flex-direction: column; gap: 6px; }
+.mini { background: var(--panel-2); border-radius: 10px; padding: 8px 10px; font-size: 12px; }
+.mini b { font-size: 13px; }
+.panel.expanded .alerts-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); align-content: start; gap: 8px; padding: 0 16px 16px; }
+.panel.expanded .alert { margin: 0; }
+.full-time { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.panel.expanded .scores { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; }
+.score-chip { display: flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 8px; background: var(--panel-2); font-size: 12px; cursor: pointer; }
+.panel.expanded .signals-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); align-content: start; gap: 8px; padding: 0 16px 16px; }
+.panel.expanded .signal { margin: 0; }
+.panel.expanded .console { font-size: 13px; }
+.panel.expanded .watchlist td { padding-top: 12px; padding-bottom: 12px; }
+.panel.expanded svg.spark { width: 160px; height: 36px; }
+
 @media (max-width: 1400px) {
   .watchlist-panel, .chart-panel { grid-column: span 6; }
   .alerts-panel, .traders-panel { grid-column: span 6; }
@@ -239,6 +279,11 @@ input:focus, select:focus { border-color: var(--blue); }
   .kpi.connect { grid-column: span 2; }
   .brand-sub, .market-block #market-countdown { display: none; }
   .toasts { width: calc(100vw - 40px); }
+  .panel.expanded { left: 8px; right: 8px; bottom: 8px; }
+  .panel.expanded .chart-body { flex-direction: column; overflow-y: auto; }
+  .panel.expanded .chart-main { min-height: 480px; flex: none; }
+  .panel.expanded .details { width: auto; border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+  .panel.expanded .table-wrap { overflow-x: auto; }
 }
 @media (max-width: 600px) {
   body { overflow-x: hidden; }
