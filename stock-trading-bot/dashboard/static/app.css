@@ -137,7 +137,7 @@ input:focus, select:focus { border-color: var(--blue); }
 .chart-head > div:first-child { flex: 1 1 auto; min-width: 0; }
 .chart-head > :not(:first-child) { flex-shrink: 0; }
 .chart-title { font-size: 20px; font-weight: 800; display: flex; align-items: center; gap: 8px; min-width: 0; }
-#chart-trend { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chart-trend { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chart-price { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .chart-price #chart-change { font-size: 15px; margin-left: 6px; }
 .ranges, .tabs, .chips { display: flex; gap: 4px; background: #0b1220; padding: 3px; border-radius: 10px; border: 1px solid var(--line); }
