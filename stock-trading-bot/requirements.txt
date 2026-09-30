@@ -1,0 +1,4 @@
+# Python 3.11+ recommended (lumibot's dependency tree does not resolve cleanly on 3.10).
+lumibot==4.5.91
+# lumibot 4.5.91 pulls in litellm, which pins python-dotenv to exactly 1.2.2.
+python-dotenv==1.2.2
