@@ -2,3 +2,6 @@
 lumibot==4.5.91
 # lumibot 4.5.91 pulls in litellm, which pins python-dotenv to exactly 1.2.2.
 python-dotenv==1.2.2
+# Command center web app (run_dashboard.py). Both are already in lumibot's dependency tree.
+fastapi==0.141.1
+uvicorn==0.53.0

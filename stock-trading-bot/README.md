@@ -21,6 +21,7 @@ This directory is standalone and does not use any of the Solana/crypto code in t
 | `run_backtest.py` | Backtest on Yahoo Finance history and print performance stats |
 | `run_live.py` | Run live on your Alpaca **paper** account |
 | `show_signals.py` | Just print what the people you follow recently bought/sold (no trading) |
+| `run_dashboard.py` / `dashboard/` | Browser **command center**: live prices, charts, alerts + pop-ups, paper account, bot controls |
 
 ## 1. Setup
 
@@ -133,6 +134,40 @@ python run_live.py
 This connects Lumibot's `Alpaca` broker (paper) to a `Trader`, runs during market hours at
 `LIVE_SLEEPTIME`, and places market orders in your paper account. Watch orders/positions in the Alpaca
 paper dashboard. Stop with `Ctrl+C`.
+
+## 6. Command center (browser app)
+
+```bash
+python run_dashboard.py            # opens http://localhost:8000
+python run_dashboard.py --no-browser --port 8080
+```
+
+A live dashboard for everything above. It runs on your machine only (listens on `127.0.0.1`).
+
+- **Live prices:** watchlist + SPY/QQQ/DIA stream tick-by-tick from Yahoo Finance's websocket (with a
+  60-second REST fallback), including pre-market and after-hours. The "Live" dot in the top bar shows
+  the connection. Add/remove tickers right in the watchlist.
+- **Charts:** click any ticker. 1D/5D show minute bars that update live; 1M–2Y show daily closes with
+  the bot's 20/50-day averages, so you can see where it would buy (blue crosses above orange) or sell.
+- **Alerts and pop-ups:** click **Turn on pop-ups** once to allow browser notifications. You get an
+  in-page alert, a desktop pop-up and a sound for:
+  - daily moves past your levels (default 3/5/10%) and sudden moves (default 1.5% in 5 minutes)
+  - your own price alerts ("tell me when NVDA is below $200")
+  - buy/sell signals (20/50-day average crossovers)
+  - new filings from the big traders you follow (13F, Form 4, Congress with a Quiver key)
+  - bot buys/sells, the daily-loss limit, and fills in your paper account
+
+  Change levels in the gear (settings) menu. Settings are saved to `.cache/dashboard_settings.json`.
+- **Paper account:** with Alpaca paper keys in `.env` it shows equity, today's P/L, buying power,
+  positions, open orders and recent fills (refreshed every few seconds). You can place paper market
+  orders, cancel orders, and close positions from the dashboard.
+- **Bot controls:** start/stop `run_live.py` (SMA only, or smart money + SMA) and watch its log live.
+
+Without Alpaca keys, live prices, charts, big-trader moves and alerts still work; account and bot
+sections show setup steps instead.
+
+Keep the tab open (it can be in the background) to receive pop-ups. Yahoo data is for information only
+and can occasionally lag; your paper orders fill at Alpaca's prices.
 
 ## Disclaimer
 
