@@ -15,17 +15,18 @@ from pydantic import BaseModel, Field
 
 import config
 from dashboard.account import PaperAccount
+from dashboard.advice import advise
 from dashboard.alerts import AlertEngine
 from dashboard.bot import BotRunner
 from dashboard.market import INDEXES, LiveMarket, chart_data, market_status
 from dashboard.settings import Settings
+from dashboard.trading212_account import Trading212Account
 from signals import load_signal_feed
 
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z.\-]{0,9}$")
-ACCOUNT_REFRESH_SECONDS = 5
 FIRST_LOAD_ALERT_DAYS = 3
 DISPLAY_DAYS = 180
 
@@ -38,12 +39,22 @@ class Hub:
         self.subscribers: set[asyncio.Queue] = set()
         self.dirty: set[str] = set()
         self.market = LiveMarket(self.settings["watchlist"], self.dirty.add)
-        self.account = PaperAccount(config.ALPACA_API_KEY, config.ALPACA_API_SECRET)
+        self.account = (
+            Trading212Account()
+            if config.BROKER == "trading212"
+            else PaperAccount(config.ALPACA_API_KEY, config.ALPACA_API_SECRET)
+        )
         self.alerts = AlertEngine(
             self.settings, lambda a: self.publish("alert", a), config.SMA_SHORT_WINDOW, config.SMA_LONG_WINDOW
         )
         self.bot = BotRunner(self._on_bot_line, lambda: self.publish("bot", self.bot.status()))
-        self.account_state: dict = {"enabled": self.account.enabled}
+        self.account_state: dict = {
+            "enabled": self.account.enabled,
+            "provider": self.account.provider,
+            "label": self.account.label,
+            "error": self.account.error,
+        }
+        self.advice_armed = False
         self.signals_state: dict = {"loading": True, "signals": [], "scores": {}, "updated": None, "error": None}
         self._tasks: list[asyncio.Task] = []
         self._chart_cache: dict[tuple[str, str], tuple[float, dict]] = {}
@@ -71,7 +82,29 @@ class Hub:
                 pass
 
     def quote_dict(self, symbol: str) -> dict:
-        return self.market.quotes[symbol].to_dict(config.SMA_SHORT_WINDOW, config.SMA_LONG_WINDOW)
+        data = self.market.quotes[symbol].to_dict(config.SMA_SHORT_WINDOW, config.SMA_LONG_WINDOW)
+        data["advice"] = self.advice(symbol)
+        return data
+
+    def advice(self, symbol: str) -> dict | None:
+        """BUY/SELL/HOLD/WATCH for a stock. None until the big-trader filings have loaded."""
+        quote = self.market.quotes.get(symbol)
+        if quote is None or self.signals_state.get("updated") is None:
+            return None
+        cutoff = (date.today() - timedelta(days=config.SIGNAL_LOOKBACK_DAYS)).isoformat()
+        traders = [
+            s for s in self.signals_state.get("signals", []) if s["symbol"] == symbol and s["disclosed_on"] >= cutoff
+        ]
+        held = sum(p["qty"] for p in self.account_state.get("positions") or [] if p["symbol"] == symbol)
+        return advise(
+            symbol,
+            quote.closes_with_live(),
+            config.SMA_SHORT_WINDOW,
+            config.SMA_LONG_WINDOW,
+            int(self.signals_state.get("scores", {}).get(symbol, 0)),
+            traders,
+            held,
+        )
 
     def state(self) -> dict:
         return {
@@ -91,6 +124,8 @@ class Hub:
                 "sma_long": config.SMA_LONG_WINDOW,
                 "max_position_pct": config.MAX_POSITION_PCT,
                 "max_daily_loss_pct": config.MAX_DAILY_LOSS_PCT,
+                "broker": config.BROKER,
+                "broker_label": self.account.label,
                 "quiver_enabled": bool(config.QUIVER_API_KEY),
                 "follows": [f.label for f in config.FOLLOW_FUNDS + config.FOLLOW_INSIDERS]
                 + (config.FOLLOW_POLITICIANS if config.QUIVER_API_KEY else []),
@@ -123,7 +158,12 @@ class Hub:
             self.dirty.clear()
             for symbol in symbols:
                 self.alerts.check_quote(self.market.quotes[symbol])
-            self.publish("quotes", [self.quote_dict(s) for s in symbols])
+            quotes = [self.quote_dict(s) for s in symbols]
+            if self.advice_armed:
+                for q in quotes:
+                    if q["advice"] and q["symbol"] in self.settings["watchlist"]:
+                        self.alerts.check_advice(q["advice"])
+            self.publish("quotes", quotes)
 
     async def _account_loop(self) -> None:
         if not self.account.enabled:
@@ -132,7 +172,7 @@ class Hub:
             self.account_state = await asyncio.to_thread(self.account.snapshot)
             self.alerts.check_account(self.account_state)
             self.publish("account", self.account_state)
-            await asyncio.sleep(ACCOUNT_REFRESH_SECONDS)
+            await asyncio.sleep(self.account.refresh_seconds)
 
     async def _status_loop(self) -> None:
         while True:
@@ -185,6 +225,12 @@ class Hub:
             ],
         }
         self.publish("signals", self.signals_state)
+        watched = [s for s in self.settings["watchlist"] if s in self.market.quotes]
+        advice = [a for a in (self.advice(s) for s in watched) if a]
+        if not self.advice_armed:
+            self.advice_armed = True
+            self.alerts.advice_summary(advice)
+        self.publish("quotes", [self.quote_dict(s) for s in watched])
 
 
 hub = Hub()
@@ -293,6 +339,7 @@ class SettingsIn(BaseModel):
     sma_alerts: bool | None = None
     big_trader_alerts: bool | None = None
     bot_alerts: bool | None = None
+    advice_alerts: bool | None = None
     signal_refresh_minutes: int | None = Field(None, ge=5)
 
 
@@ -345,8 +392,8 @@ async def place_order(body: OrderIn):
     hub.alerts.raise_alert(
         "info",
         "order",
-        f"Order sent: {body.side.upper()} {body.qty:g} {symbol}",
-        "Market order sent to your Alpaca paper account.",
+        f"Your order sent: {body.side.upper()} {body.qty:g} {symbol}",
+        f"Market order sent to your {hub.account.label}. The bot won't count these shares as its own.",
         symbol,
     )
     return order

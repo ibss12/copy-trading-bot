@@ -1,4 +1,4 @@
-"""Starts/stops `run_live.py` (Alpaca paper) as a child process and streams its output."""
+"""Starts/stops `run_live.py` (Alpaca paper or Trading 212 practice) as a child process and streams its output."""
 
 import asyncio
 import os
@@ -34,13 +34,16 @@ class BotRunner:
             "started_at": int(self.started_at * 1000) if self.started_at and self.running else None,
             "exit_code": self.exit_code,
             "strategy": self.strategy,
-            "can_start": bool(config.ALPACA_API_KEY and config.ALPACA_API_SECRET),
+            "can_start": config.broker_keys_configured(),
+            "broker": config.BROKER,
         }
 
     async def start(self, watchlist: list[str], strategy: str) -> None:
         if self.running:
             return
-        if not (config.ALPACA_API_KEY and config.ALPACA_API_SECRET):
+        if not config.broker_keys_configured():
+            if config.BROKER == "trading212":
+                raise RuntimeError("Add your Trading 212 practice API key and secret to stock-trading-bot/.env first")
             raise RuntimeError("Add your Alpaca paper keys to stock-trading-bot/.env first")
         env = {**os.environ, "WATCHLIST": ",".join(watchlist), "STRATEGY": strategy, "PYTHONUNBUFFERED": "1"}
         self.process = await asyncio.create_subprocess_exec(
@@ -54,7 +57,8 @@ class BotRunner:
         self.started_at = time.time()
         self.exit_code = None
         self.strategy = strategy
-        self._emit(f"Bot started ({strategy}, paper account) watching {', '.join(watchlist)}")
+        account = "Trading 212 practice account" if config.BROKER == "trading212" else "Alpaca paper account"
+        self._emit(f"Bot started ({strategy}, {account}) watching {', '.join(watchlist)}")
         self.on_status()
         asyncio.create_task(self._pump(self.process))
 

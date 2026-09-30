@@ -32,6 +32,16 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 // ---------- formatting ----------
 const money = (v, d = 2) => v == null || isNaN(v) ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 const signedMoney = (v) => (v > 0 ? "+" : "") + money(v);
+const am = (v, d = 2) => { const c = S.account.currency_symbol || "$"; return v == null || isNaN(v) ? "—" : (v < 0 ? "-" : "") + c + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }); };
+const signedAm = (v) => (v > 0 ? "+" : "") + am(v);
+const isT212 = () => S.config.broker === "trading212";
+const brokerLabel = () => S.config.broker_label || "Alpaca paper account";
+const ADVICE = { buy: ["BUY", "up"], sell: ["SELL", "down"], hold: ["HOLD", "hold"], watch: ["WATCH", "neutral"] };
+function adviceBadge(adv) {
+  if (!adv) return "";
+  const [label, c] = ADVICE[adv.action];
+  return `<span class="badge advice ${c}" title="${esc(adv.headline + "\n" + adv.reasons.join("\n"))}">${label}</span>`;
+}
 const pct = (v, d = 2) => v == null || isNaN(v) ? "—" : (v > 0 ? "+" : "") + v.toFixed(d) + "%";
 const cls = (v) => (v > 0 ? "up" : v < 0 ? "down" : "");
 const compact = (v) => v == null ? "—" : Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(v);
@@ -174,7 +184,17 @@ function renderKpis() {
   const a = S.account;
   const bot = S.bot;
   const botCard = `<div class="kpi"><div class="label">Trading bot</div><div class="value ${bot.running ? "up" : ""}">${bot.running ? "Running" : "Stopped"}</div>
-      <div class="sub">${bot.running ? "since " + new Date(bot.started_at).toLocaleTimeString() : bot.can_start ? "Ready to start" : "Needs Alpaca paper keys"}</div></div>`;
+      <div class="sub">${bot.running ? "since " + new Date(bot.started_at).toLocaleTimeString() : bot.can_start ? "Ready to start" : isT212() ? "Needs Trading 212 practice keys" : "Needs Alpaca paper keys"}</div></div>`;
+  if (!a.enabled && isT212()) {
+    $("#kpis").innerHTML = `<div class="kpi connect">
+        <svg class="plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></svg>
+        <div><div style="font-weight:700">Connect your Trading 212 practice account so the bot can trade and you can see your balance</div>
+        <ol><li>In the Trading 212 app, switch to your <b>Practice</b> account (Invest or Stocks ISA)</li>
+        <li>Settings &rarr; <b>API (Beta)</b> &rarr; Generate API key. Copy the key and secret.</li>
+        <li>Put them in <code>stock-trading-bot/.env</code> (<code>TRADING212_API_KEY</code>, <code>TRADING212_API_SECRET</code>) and restart <code>python run_dashboard.py</code>.</li></ol>
+        ${a.error ? `<div class="down small">${esc(a.error)}</div>` : ""}</div></div>` + botCard;
+    return;
+  }
   if (!a.enabled) {
     $("#kpis").innerHTML = `<div class="kpi connect">
         <svg class="plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></svg>
@@ -185,16 +205,16 @@ function renderKpis() {
     return;
   }
   if (a.error) {
-    $("#kpis").innerHTML = `<div class="kpi connect"><svg class="plug" viewBox="0 0 24 24" style="color:var(--amber)"><path d="M12 3 2 21h20L12 3zM12 10v5M12 18h.01"/></svg><div><div style="font-weight:700">Couldn't reach your Alpaca paper account</div><div class="muted small">${esc(a.error)}</div></div></div>` + botCard;
+    $("#kpis").innerHTML = `<div class="kpi connect"><svg class="plug" viewBox="0 0 24 24" style="color:var(--amber)"><path d="M12 3 2 21h20L12 3zM12 10v5M12 18h.01"/></svg><div><div style="font-weight:700">Couldn't reach your ${esc(brokerLabel())}</div><div class="muted small">${esc(a.error)}</div></div></div>` + botCard;
     return;
   }
-  if (a.equity == null) { $("#kpis").innerHTML = `<div class="kpi connect"><div>Loading your paper account…</div></div>` + botCard; return; }
+  if (a.equity == null) { $("#kpis").innerHTML = `<div class="kpi connect"><div>Loading your ${esc(brokerLabel())}…</div></div>` + botCard; return; }
   const invested = a.positions.reduce((t, p) => t + p.market_value, 0);
   $("#kpis").innerHTML = `
-    <div class="kpi"><div class="label">Portfolio value</div><div class="value">${money(a.equity)}</div><div class="sub">Paper account</div></div>
-    <div class="kpi"><div class="label">Today's P/L</div><div class="value ${cls(a.day_pl)}">${signedMoney(a.day_pl)}</div><div class="sub ${cls(a.day_pl)}">${pct(a.day_pl_pct)} · limit -${(S.config.max_daily_loss_pct * 100).toFixed(1)}%</div></div>
-    <div class="kpi"><div class="label">Cash</div><div class="value">${money(a.cash)}</div><div class="sub">Buying power ${money(a.buying_power, 0)}</div></div>
-    <div class="kpi"><div class="label">Invested</div><div class="value">${money(invested)}</div><div class="sub">${a.positions.length} position${a.positions.length === 1 ? "" : "s"} · ${a.open_orders.length} open order${a.open_orders.length === 1 ? "" : "s"}</div></div>
+    <div class="kpi"><div class="label">Portfolio value</div><div class="value">${am(a.equity)}</div><div class="sub">${esc(a.label || brokerLabel())}</div></div>
+    <div class="kpi"><div class="label">Today's P/L</div><div class="value ${cls(a.day_pl)}">${signedAm(a.day_pl)}</div><div class="sub ${cls(a.day_pl)}">${pct(a.day_pl_pct)} · limit -${(S.config.max_daily_loss_pct * 100).toFixed(1)}%</div></div>
+    <div class="kpi"><div class="label">Cash</div><div class="value">${am(a.cash)}</div><div class="sub">${isT212() ? "Available to trade" : "Buying power " + am(a.buying_power, 0)}</div></div>
+    <div class="kpi"><div class="label">Invested</div><div class="value">${am(invested)}</div><div class="sub">${a.positions.length} position${a.positions.length === 1 ? "" : "s"} · ${a.open_orders.length} open order${a.open_orders.length === 1 ? "" : "s"}</div></div>
     ${botCard}`;
 }
 
@@ -215,7 +235,8 @@ function sparkSvg(values, prevClose) {
 
 function signalBadges(q) {
   const score = (S.signals.scores || {})[q.symbol];
-  let html = q.trend ? `<span class="badge ${q.trend}" title="${S.config.sma_short}-day average is ${q.trend === "up" ? "above" : "below"} the ${S.config.sma_long}-day average">${q.trend === "up" ? "▲ Uptrend" : "▼ Downtrend"}</span>` : '<span class="badge neutral">—</span>';
+  let html = q.advice ? adviceBadge(q.advice) + " " : "";
+  html += q.trend ? `<span class="badge ${q.trend}" title="${S.config.sma_short}-day average is ${q.trend === "up" ? "above" : "below"} the ${S.config.sma_long}-day average">${q.trend === "up" ? "▲ Uptrend" : "▼ Downtrend"}</span>` : '<span class="badge neutral">—</span>';
   if (score) html += ` <span class="badge star" title="Big traders: ${score > 0 ? score + " more buying than selling" : -score + " more selling than buying"}">★ ${score > 0 ? "+" : ""}${score}</span>`;
   return html;
 }
@@ -420,18 +441,25 @@ function renderChartHeader() {
   if (!q) return;
   $("#chart-symbol").textContent = sym;
   const trend = $("#chart-trend");
-  trend.className = "badge " + (q.trend || "neutral");
-  trend.textContent = q.trend === "up" ? "▲ Uptrend (bot: hold/buy)" : q.trend === "down" ? "▼ Downtrend (bot: stay out)" : "";
+  if (q.advice) {
+    trend.className = "badge advice " + ADVICE[q.advice.action][1];
+    trend.textContent = q.advice.headline;
+    trend.title = q.advice.reasons.join("\n");
+  } else {
+    trend.className = "badge " + (q.trend || "neutral");
+    trend.textContent = q.trend === "up" ? "▲ Uptrend (bot: hold/buy)" : q.trend === "down" ? "▼ Downtrend (bot: stay out)" : "";
+    trend.title = "";
+  }
   $("#chart-price").textContent = money(q.price);
   $("#chart-change").innerHTML = `<span class="${cls(q.change)}">${signedMoney(q.change)} (${pct(q.change_pct)})</span> <span class="muted small">today</span>`;
   const pos = (S.account.positions || []).find((p) => p.symbol === sym);
   const stats = [
     ["Open", money(q.open)], ["Day high", money(q.day_high)], ["Day low", money(q.day_low)], ["Prev close", money(q.prev_close)], ["Volume", compact(q.volume)],
-    pos ? ["You own", `${pos.qty} (${pct(pos.unrealized_plpc)})`] : [`${S.config.sma_short}/${S.config.sma_long}-day avg`, `${money(q.sma_short, 0)} / ${money(q.sma_long, 0)}`],
+    pos ? [pos.bot_qty != null ? "Held (bot / you)" : "You own", pos.bot_qty != null ? `${pos.bot_qty} / ${pos.your_qty}` : `${pos.qty} (${pct(pos.unrealized_plpc)})`] : [`${S.config.sma_short}/${S.config.sma_long}-day avg`, `${money(q.sma_short, 0)} / ${money(q.sma_long, 0)}`],
   ];
   $("#chart-stats").innerHTML = stats.map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
   const canTrade = S.account.enabled && !S.account.error;
-  ["#btn-buy", "#btn-sell"].forEach((b) => { $(b).disabled = !canTrade; $(b).title = canTrade ? "" : "Connect your Alpaca paper account to trade"; });
+  ["#btn-buy", "#btn-sell"].forEach((b) => { $(b).disabled = !canTrade; $(b).title = canTrade ? `Your own trade on the ${brokerLabel()}` : `Connect your ${brokerLabel()} to trade`; });
 }
 
 function selectSymbol(sym) {
@@ -556,12 +584,14 @@ async function renderChartDetails(force = false) {
     <h4>52-week range</h4>
     <div class="range-bar"><i style="left:${posPct.toFixed(1)}%"></i></div>
     <div class="range-ends"><span>${money(lo)}</span><span>${pct((price / hi - 1) * 100, 1)} from high</span><span>${money(hi)}</span></div>
+    ${q.advice ? `<h4>What should I do?</h4><div class="explain"><span class="badge advice ${ADVICE[q.advice.action][1]}">${ADVICE[q.advice.action][0]}</span> <b>${esc(q.advice.headline)}</b><ul class="reasons">${q.advice.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul><span class="muted small">Big-trader data comes from public filings, which are published days to weeks after the trade.</span></div>` : ""}
     <h4>What the bot sees</h4><div class="explain">${botText}${crossText ? "<br>" + crossText : ""}</div>
     ${pos ? `<h4>Your position</h4><div class="kv">
       <div><div class="k">Shares</div><div class="v">${pos.qty}</div></div>
+      ${pos.bot_qty != null ? `<div><div class="k">Bot's / yours</div><div class="v">${pos.bot_qty} / ${pos.your_qty}</div></div>` : ""}
       <div><div class="k">Avg cost</div><div class="v">${money(pos.avg_entry_price)}</div></div>
-      <div><div class="k">Value</div><div class="v">${money(pos.market_value)}</div></div>
-      <div><div class="k">Total P/L</div><div class="v ${cls(pos.unrealized_pl)}">${signedMoney(pos.unrealized_pl)}</div></div>
+      <div><div class="k">Value</div><div class="v">${am(pos.market_value)}</div></div>
+      <div><div class="k">Total P/L</div><div class="v ${cls(pos.unrealized_pl)}">${signedAm(pos.unrealized_pl)}</div></div>
       <div><div class="k">Return</div><div class="v ${cls(pos.unrealized_plpc)}">${pct(pos.unrealized_plpc)}</div></div>
       <div><div class="k">Weight</div><div class="v">${pos.weight_pct.toFixed(1)}%</div></div></div>` : ""}
     <h4>Big traders${score ? ` <span class="badge star">★ ${score > 0 ? "+" : ""}${score}</span>` : ""}</h4>
@@ -573,7 +603,7 @@ async function renderChartDetails(force = false) {
 }
 
 // ---------- alerts ----------
-const ALERT_GROUPS = { move: ["move", "price"], sma: ["sma"], big_trader: ["big_trader"], trades: ["bot", "order"] };
+const ALERT_GROUPS = { move: ["move", "price"], sma: ["sma", "advice"], big_trader: ["big_trader"], trades: ["bot", "order"] };
 function renderAlerts() {
   const f = S.alertFilter;
   const list = f === "all" ? S.alerts : S.alerts.filter((a) => ALERT_GROUPS[f].includes(a.category));
@@ -621,22 +651,24 @@ function renderSignals() {
 function renderPositions() {
   const a = S.account;
   const body = $("#positions-body");
-  if (!a.enabled || a.error || a.equity == null) { body.innerHTML = `<div class="empty">${a.enabled ? "Waiting for your paper account…" : "Connect your Alpaca paper account to see positions and orders."}</div>`; return; }
+  if (!a.enabled || a.error || a.equity == null) { body.innerHTML = `<div class="empty">${a.error ? esc(a.error) : a.enabled ? `Waiting for your ${esc(brokerLabel())}…` : `Connect your ${esc(brokerLabel())} to see positions and orders.`}</div>`; return; }
+  const split = isT212();
+  const by = (o) => split ? `<td><span class="badge ${o.by === "bot" ? "star" : "neutral"}">${o.by === "bot" ? "Bot" : "You"}</span></td>` : "";
   if (S.posTab === "positions") {
-    body.innerHTML = a.positions.length ? `<table><thead><tr><th>Symbol</th><th class="r">Shares</th><th class="r">Avg cost</th><th class="r">Price</th><th class="r">Value</th><th class="r">Weight</th><th class="r">Total P/L</th><th class="r">Today</th><th></th></tr></thead><tbody>
-      ${a.positions.map((p) => `<tr data-sym="${p.symbol}"><td class="sym">${p.symbol}</td><td class="r">${p.qty}</td><td class="r">${money(p.avg_entry_price)}</td><td class="r">${money(p.current_price)}</td><td class="r">${money(p.market_value)}</td>
-        <td class="r">${p.weight_pct.toFixed(1)}%</td><td class="r ${cls(p.unrealized_pl)}">${signedMoney(p.unrealized_pl)}<br><span class="small">${pct(p.unrealized_plpc)}</span></td><td class="r ${cls(p.intraday_pl)}">${signedMoney(p.intraday_pl)}</td>
+    body.innerHTML = a.positions.length ? `<table><thead><tr><th>Symbol</th><th class="r">Shares</th>${split ? `<th class="r" title="Shares the bot bought (it only ever sells these)">Bot's</th><th class="r">Yours</th>` : ""}<th class="r">Avg cost</th><th class="r">Price</th><th class="r">Value</th><th class="r">Weight</th><th class="r">Total P/L</th>${split ? "" : `<th class="r">Today</th>`}<th></th></tr></thead><tbody>
+      ${a.positions.map((p) => `<tr data-sym="${p.symbol}"><td class="sym">${p.symbol}</td><td class="r">${p.qty}</td>${split ? `<td class="r">${p.bot_qty}</td><td class="r">${p.your_qty}</td>` : ""}<td class="r">${money(p.avg_entry_price)}</td><td class="r">${money(p.current_price)}</td><td class="r">${am(p.market_value)}</td>
+        <td class="r">${p.weight_pct.toFixed(1)}%</td><td class="r ${cls(p.unrealized_pl)}">${signedAm(p.unrealized_pl)}<br><span class="small">${pct(p.unrealized_plpc)}</span></td>${split ? "" : `<td class="r ${cls(p.intraday_pl)}">${signedAm(p.intraday_pl)}</td>`}
         <td><button class="btn ghost sm" data-close-pos="${p.symbol}" data-qty="${p.qty}">Close</button></td></tr>`).join("")}</tbody></table>`
       : `<div class="empty">No open positions yet.</div>`;
   } else if (S.posTab === "orders") {
-    body.innerHTML = a.open_orders.length ? `<table><thead><tr><th>Symbol</th><th>Side</th><th class="r">Qty</th><th>Type</th><th>Status</th><th>Sent</th><th></th></tr></thead><tbody>
-      ${a.open_orders.map((o) => `<tr><td class="sym">${o.symbol}</td><td class="${o.side === "buy" ? "up" : "down"}">${o.side.toUpperCase()}</td><td class="r">${o.qty}</td><td>${esc(o.type)}</td><td>${esc(o.status)}</td><td class="small muted">${o.submitted_at ? new Date(o.submitted_at).toLocaleTimeString() : ""}</td>
+    body.innerHTML = a.open_orders.length ? `<table><thead><tr><th>Symbol</th><th>Side</th><th class="r">Qty</th><th>Type</th><th>Status</th><th>Sent</th>${split ? "<th>By</th>" : ""}<th></th></tr></thead><tbody>
+      ${a.open_orders.map((o) => `<tr><td class="sym">${o.symbol}</td><td class="${o.side === "buy" ? "up" : "down"}">${o.side.toUpperCase()}</td><td class="r">${o.qty}</td><td>${esc(o.type)}</td><td>${esc(o.status)}</td><td class="small muted">${o.submitted_at ? new Date(o.submitted_at).toLocaleTimeString() : ""}</td>${by(o)}
         <td><button class="btn ghost sm" data-cancel="${o.id}">Cancel</button></td></tr>`).join("")}</tbody></table>`
       : `<div class="empty">No open orders.</div>`;
   } else {
     const fills = a.recent_orders.filter((o) => o.status === "filled");
-    body.innerHTML = fills.length ? `<table><thead><tr><th>Symbol</th><th>Side</th><th class="r">Qty</th><th class="r">Price</th><th>Filled</th></tr></thead><tbody>
-      ${fills.map((o) => `<tr><td class="sym">${o.symbol}</td><td class="${o.side === "buy" ? "up" : "down"}">${o.side.toUpperCase()}</td><td class="r">${o.filled_qty}</td><td class="r">${money(o.filled_avg_price)}</td><td class="small muted">${o.filled_at ? new Date(o.filled_at).toLocaleString() : ""}</td></tr>`).join("")}</tbody></table>`
+    body.innerHTML = fills.length ? `<table><thead><tr><th>Symbol</th><th>Side</th><th class="r">Qty</th><th class="r">Price</th><th>Filled</th>${split ? "<th>By</th>" : ""}</tr></thead><tbody>
+      ${fills.map((o) => `<tr><td class="sym">${o.symbol}</td><td class="${o.side === "buy" ? "up" : "down"}">${o.side.toUpperCase()}</td><td class="r">${o.filled_qty}</td><td class="r">${money(o.filled_avg_price)}</td><td class="small muted">${o.filled_at ? new Date(o.filled_at).toLocaleString() : ""}</td>${by(o)}</tr>`).join("")}</tbody></table>`
       : `<div class="empty">No recent fills.</div>`;
   }
 }
@@ -666,9 +698,9 @@ function renderBot() {
   $("#btn-bot-stop").disabled = !b.running;
   $("#bot-strategy").disabled = b.running;
   $("#bot-info").innerHTML = !b.can_start
-    ? "Add your Alpaca <b>paper</b> keys to <code>.env</code> to let the bot trade. It never uses real money."
-    : b.running ? `Trading your watchlist on the paper account (${b.strategy === "sma" ? "SMA crossover" : "smart money + SMA"}). Buys are capped at ${(S.config.max_position_pct * 100).toFixed(0)}% of the portfolio per stock.`
-    : "The bot checks your watchlist every 30 minutes and trades on the paper account.";
+    ? (isT212() ? "Add your Trading 212 <b>practice</b> API key and secret to <code>.env</code> to let the bot trade. It never connects to real money." : "Add your Alpaca <b>paper</b> keys to <code>.env</code> to let the bot trade. It never uses real money.")
+    : b.running ? `Trading your watchlist on your ${esc(brokerLabel())} (${b.strategy === "sma" ? "SMA crossover" : "smart money + SMA"}). Buys are capped at ${(S.config.max_position_pct * 100).toFixed(0)}% of the portfolio per stock.${isT212() ? " You get a pop-up for every bot trade, and it only sells shares it bought." : ""}`
+    : `The bot checks your watchlist every 30 minutes and trades on your ${esc(brokerLabel())}.${isT212() ? " You can keep trading yourself; the bot never sells your shares." : ""}`;
   if (!$("#bot-log").childNodes.length) $("#bot-log").textContent = "";
 }
 
@@ -732,7 +764,7 @@ function orderModal(side, sym, qty) {
     <div class="summary">${side === "buy" ? "Buy" : "Sell"} <b>${qty}</b> share${qty === 1 ? "" : "s"} of <b>${sym}</b> at market<br>
     <span class="muted">≈ ${money(est)} at ${money(q?.price)}${eq ? ` · ${weight.toFixed(1)}% of your portfolio` : ""}</span></div>
     ${over ? `<p class="down small">Heads up: that's more than the bot's ${(S.config.max_position_pct * 100).toFixed(0)}% per-stock limit.</p>` : ""}
-    <p class="muted small">This goes to your Alpaca <b>paper</b> account. No real money is used.${S.market.is_open ? "" : " The market is closed, so it will fill when it next opens."}</p>`,
+    <p class="muted small">This goes to your ${isT212() ? "Trading 212 <b>practice</b> account as <b>your own</b> trade (the bot won't count these shares as its own)" : "Alpaca <b>paper</b> account"}. No real money is used.${S.market.is_open ? "" : " The market is closed, so it will fill when it next opens."}</p>`,
     [["Cancel", "ghost", () => {}], [`Confirm ${side}`, side, async () => { await api("/api/orders", "POST", { symbol: sym, qty, side }); }]]);
 }
 
@@ -744,6 +776,7 @@ function settingsModal() {
       <div class="field"><label>Sudden move (%)</label><input id="st-fast" type="number" step="0.1" min="0.1" value="${s.fast_move_pct}" /></div>
       <div class="field"><label>within (minutes)</label><input id="st-fast-min" type="number" min="1" max="60" value="${s.fast_move_minutes}" /></div>
     </div>
+    <label class="check"><input type="checkbox" id="st-advice" ${s.advice_alerts ? "checked" : ""}/> Buy/sell calls (when a stock turns BUY or SELL, with the reasons)</label>
     <label class="check"><input type="checkbox" id="st-sma" ${s.sma_alerts ? "checked" : ""}/> Buy/sell signals (${S.config.sma_short}/${S.config.sma_long}-day average crossovers)</label>
     <label class="check"><input type="checkbox" id="st-big" ${s.big_trader_alerts ? "checked" : ""}/> New big-trader filings (funds, insiders, CEOs, Congress)</label>
     <label class="check"><input type="checkbox" id="st-bot" ${s.bot_alerts ? "checked" : ""}/> Bot trades and daily-loss limit</label>
@@ -758,6 +791,7 @@ function settingsModal() {
         fast_move_pct: parseFloat($("#st-fast").value),
         fast_move_minutes: parseInt($("#st-fast-min").value, 10),
         sma_alerts: $("#st-sma").checked,
+        advice_alerts: $("#st-advice").checked,
         big_trader_alerts: $("#st-big").checked,
         bot_alerts: $("#st-bot").checked,
         signal_refresh_minutes: parseInt($("#st-refresh").value, 10),
@@ -872,7 +906,7 @@ $("#btn-sell").onclick = () => { const qty = Number($("#trade-qty").value); if (
 $("#btn-price-alert").onclick = () => S.selected && priceAlertModal(S.selected);
 
 $("#btn-bot-start").onclick = () => openModal("Start the trading bot?", `
-  <p>The bot will trade your watchlist (<b>${S.watchlist.join(", ")}</b>) on your Alpaca <b>paper</b> account using the <b>${$("#bot-strategy").selectedOptions[0].text}</b> strategy.</p>
+  <p>The bot will trade your watchlist (<b>${S.watchlist.join(", ")}</b>) on your ${isT212() ? "Trading 212 <b>practice</b>" : "Alpaca <b>paper</b>"} account using the <b>${$("#bot-strategy").selectedOptions[0].text}</b> strategy.</p>
   <p class="muted small">Each stock is capped at ${(S.config.max_position_pct * 100).toFixed(0)}% of the portfolio and new buys stop if the account is down ${(S.config.max_daily_loss_pct * 100).toFixed(1)}% on the day. No real money is used.</p>`,
   [["Cancel", "ghost", () => {}], ["Start bot", "primary", async () => { await api("/api/bot/start", "POST", { strategy: $("#bot-strategy").value }); }]]);
 $("#btn-bot-stop").onclick = () => api("/api/bot/stop", "POST").catch((e) => notifyError(e.message));
@@ -919,6 +953,7 @@ async function init() {
     signals: st.signals, alerts: st.alerts, bot: st.bot, settings: st.settings, config: st.config,
   });
   $("#bot-strategy").value = st.config.strategy;
+  $("#brand-sub").innerHTML = `${isT212() ? "Trading 212 practice" : "Paper trading"} &middot; live data`;
   st.bot_log.forEach(appendLog);
   updateNotifyUi(); renderMarket(); renderTape(); renderKpis(); renderWatchlist(); renderAlerts(); renderSignals(); renderPositions(); renderBot();
   const saved = localStorage.getItem("cc.selected");

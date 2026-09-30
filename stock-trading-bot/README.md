@@ -1,12 +1,13 @@
-# Stock Trading Bot (Lumibot + Alpaca paper trading)
+# Stock Trading Bot (Lumibot + Alpaca paper / Trading 212 practice)
 
 A personal stock bot built on [Lumibot](https://github.com/Lumiwealth/lumibot). It watches a list of
 stocks, trades a short/long **SMA crossover**, and can optionally **follow the big names** — hedge-fund
 managers, Trump family filings, CEOs buying/selling their own stock, and members of Congress like
 Nancy Pelosi — using their **public** disclosures.
 
-> **Paper trading only.** `config.py` hard-codes `PAPER: True` for Alpaca and `run_live.py` refuses to
-> start otherwise. No real money is ever traded.
+> **Paper/practice trading only.** `config.py` hard-codes `PAPER: True` for Alpaca, and the Trading 212
+> client refuses any server except `https://demo.trading212.com` (the practice account). No real money
+> is ever traded.
 
 This directory is standalone and does not use any of the Solana/crypto code in the rest of the repo.
 
@@ -19,7 +20,9 @@ This directory is standalone and does not use any of the Solana/crypto code in t
 | `strategies/smart_money.py` | `SmartMoneySma`: SMA crossover + "follow the big traders" signals |
 | `signals/` | Public-disclosure data: SEC 13F, SEC Form 4, Quiver congressional trades |
 | `run_backtest.py` | Backtest on Yahoo Finance history and print performance stats |
-| `run_live.py` | Run live on your Alpaca **paper** account |
+| `run_live.py` | Run live on your Alpaca **paper** or Trading 212 **practice** account |
+| `trading212/` | Trading 212 practice API client, Lumibot broker, and the ledger of shares the bot bought |
+| `tests/` | Trading 212 tests against a local fake server (`python -m unittest discover -s tests -t .`) |
 | `show_signals.py` | Just print what the people you follow recently bought/sold (no trading) |
 | `run_dashboard.py` / `dashboard/` | Browser **command center**: live prices, charts, alerts + pop-ups, paper account, bot controls |
 
@@ -135,6 +138,35 @@ This connects Lumibot's `Alpaca` broker (paper) to a `Trader`, runs during marke
 `LIVE_SLEEPTIME`, and places market orders in your paper account. Watch orders/positions in the Alpaca
 paper dashboard. Stop with `Ctrl+C`.
 
+## 5b. Run live on a Trading 212 practice account
+
+The bot can place its own entries and exits on your **Trading 212 practice (demo)** account, notify you
+of each one, and still let you trade yourself.
+
+1. In the Trading 212 app switch to your **Practice** account (Invest or Stocks ISA), then
+   Settings &rarr; **API (Beta)** &rarr; generate a key. Copy the key and secret.
+2. In `.env`: `BROKER=trading212`, `TRADING212_API_KEY=...`, `TRADING212_API_SECRET=...`.
+   Leave `TRADING212_BASE_URL` at `https://demo.trading212.com/api/v0`; any other server is refused.
+3. `python run_live.py` (or **Start bot** in the command center).
+
+How it works:
+
+- **Same strategy and risk limits** as on Alpaca (SMA / smart money, 10% per stock, max positions,
+  daily-loss limit, skip a stock that already has an open order). Prices and charts still come from
+  Yahoo, because Trading 212's API has no live price feed.
+- **Your trades vs. the bot's:** Trading 212 only reports one combined position per stock, so the bot
+  records every order it places in `.cache/trading212/bot_ledger.json` and counts its own filled
+  shares. The strategy only sees those shares, and a bot sell is capped at them, so it never sells
+  shares you bought yourself (in the app or from the dashboard). If you sell more than your own shares
+  of a stock, the bot's count shrinks to what's left. Don't delete the ledger while the bot holds
+  positions, or it will treat those shares as yours.
+- **No double orders:** Trading 212 warns that repeating an order request can create two orders, so the
+  bot never retries one. If a request gets no clear answer, the order is marked "unconfirmed" (blocking
+  another order for that stock) until it shows up in Trading 212 or 10 minutes pass.
+- **Notifications:** the command center pops up when the bot sends an order and when it fills
+  ("Bot's order filled"), and when your own orders fill ("Your order filled").
+- Only US stocks with market orders are supported. Balances show in your account's currency.
+
 ## 6. Command center (browser app)
 
 ```bash
@@ -155,9 +187,15 @@ A live dashboard for everything above. It runs on your machine only (listens on 
   - your own price alerts ("tell me when NVDA is below $200")
   - buy/sell signals (20/50-day average crossovers)
   - new filings from the big traders you follow (13F, Form 4, Congress with a Quiver key)
-  - bot buys/sells, the daily-loss limit, and fills in your paper account
+  - **buy/sell calls:** each watchlist stock gets a BUY / SELL / HOLD / WATCH badge with the reasons
+    (trend, recent crossover, which big traders bought or sold). You get a pop-up when a stock turns
+    BUY or SELL, plus a "Today's calls" summary when the dashboard starts
+  - bot buys/sells, the daily-loss limit, and fills in your account (bot's and yours)
 
   Change levels in the gear (settings) menu. Settings are saved to `.cache/dashboard_settings.json`.
+- **Trading 212 practice account** (`BROKER=trading212`): positions show how many shares are the bot's
+  and how many are yours, and orders are labelled Bot/You. Buy/Sell on the dashboard places *your own*
+  trade (the bot won't count those shares); it refuses a second order while one is open for that stock.
 - **Paper account:** with Alpaca paper keys in `.env` it shows equity, today's P/L, buying power,
   positions, open orders and recent fills (refreshed every few seconds). You can place paper market
   orders, cancel orders, and close positions from the dashboard.

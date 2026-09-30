@@ -14,6 +14,7 @@ DEFAULTS = {
     "sma_alerts": True,
     "big_trader_alerts": True,
     "bot_alerts": True,
+    "advice_alerts": True,
     "signal_refresh_minutes": 60,
     "price_alerts": [],
 }

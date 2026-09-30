@@ -29,6 +29,10 @@ def _order_dict(order) -> dict:
 
 
 class PaperAccount:
+    provider = "alpaca"
+    label = "Alpaca paper account"
+    refresh_seconds = 5
+
     def __init__(self, api_key: str, api_secret: str):
         self.enabled = bool(api_key and api_secret)
         self.error: str | None = None
@@ -36,7 +40,7 @@ class PaperAccount:
 
     def snapshot(self) -> dict:
         if self._client is None:
-            return {"enabled": False}
+            return {"enabled": False, "provider": self.provider, "label": self.label}
         try:
             account = self._client.get_account()
             positions = self._client.get_all_positions()
@@ -45,12 +49,16 @@ class PaperAccount:
         except Exception as exc:
             self.error = str(exc)
             logger.warning("Alpaca paper account request failed: %s", exc)
-            return {"enabled": True, "error": self.error}
+            return {"enabled": True, "provider": self.provider, "label": self.label, "error": self.error}
         self.error = None
         equity, last_equity = _f(account.equity), _f(account.last_equity)
         return {
             "enabled": True,
+            "provider": self.provider,
+            "label": self.label,
             "error": None,
+            "currency": "USD",
+            "currency_symbol": "$",
             "equity": equity,
             "last_equity": last_equity,
             "day_pl": equity - last_equity,

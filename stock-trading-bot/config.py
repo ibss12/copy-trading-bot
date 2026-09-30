@@ -69,6 +69,16 @@ ALPACA_CONFIG = {
     "PAPER": True,
 }
 
+# --- Trading 212 (practice/demo account only) --------------------------------
+TRADING212_API_KEY = _str("TRADING212_API_KEY")
+TRADING212_API_SECRET = _str("TRADING212_API_SECRET")
+TRADING212_DEMO_URL = "https://demo.trading212.com/api/v0"
+# Only the demo server (or a local test server) is accepted; see trading212/client.py.
+TRADING212_BASE_URL = _str("TRADING212_BASE_URL", TRADING212_DEMO_URL)
+
+# Where the bot places its orders: "alpaca" (paper) or "trading212" (practice account).
+BROKER = _str("BROKER", "alpaca").lower()
+
 # --- What to trade -----------------------------------------------------------
 WATCHLIST = [symbol.upper() for symbol in _list("WATCHLIST", "AAPL,TSLA,MSFT,NVDA,AMZN,GOOGL,META")]
 STRATEGY = _str("STRATEGY", "smart_money").lower()
@@ -143,3 +153,11 @@ def validate() -> None:
         raise ValueError("STRATEGY must be 'sma' or 'smart_money'")
     if not WATCHLIST:
         raise ValueError("WATCHLIST is empty")
+    if BROKER not in ("alpaca", "trading212"):
+        raise ValueError("BROKER must be 'alpaca' or 'trading212'")
+
+
+def broker_keys_configured() -> bool:
+    if BROKER == "trading212":
+        return bool(TRADING212_API_KEY and TRADING212_API_SECRET)
+    return bool(ALPACA_API_KEY and ALPACA_API_SECRET)

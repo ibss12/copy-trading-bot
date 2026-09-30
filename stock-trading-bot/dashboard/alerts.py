@@ -34,6 +34,7 @@ class AlertEngine:
         self._fast_sent: dict[str, float] = {}
         self._seen_signals: set[str] = set()
         self._seen_orders: set[str] | None = None
+        self._advice: dict[str, str] = {}
 
     def raise_alert(self, level: str, category: str, title: str, message: str, symbol: str | None = None) -> dict:
         alert = {
@@ -192,6 +193,7 @@ class AlertEngine:
         if orders is None:
             return
         filled = {o["id"]: o for o in orders if o["status"] == "filled"}
+        label = snapshot.get("label", "paper account")
         if self._seen_orders is None:
             self._seen_orders = set(filled)
             return
@@ -199,11 +201,46 @@ class AlertEngine:
             if order_id in self._seen_orders:
                 continue
             self._seen_orders.add(order_id)
+            who = {"bot": "Bot's order filled", "you": "Your order filled"}.get(order.get("by"), "Order filled")
             self.raise_alert(
                 "success" if order["side"] == "buy" else "warning",
-                "order",
-                f"Order filled: {order['side'].upper()} {order['filled_qty']:g} {order['symbol']}",
+                "bot" if order.get("by") == "bot" else "order",
+                f"{who}: {order['side'].upper()} {order['filled_qty']:g} {order['symbol']}",
                 f"{order['side'].capitalize()} {order['filled_qty']:g} {order['symbol']} "
-                f"at ${order['filled_avg_price']:,.2f} (paper account).",
+                f"at ${order['filled_avg_price']:,.2f} ({label}).",
                 order["symbol"],
             )
+
+    # --- buy/sell advice ----------------------------------------------------------
+
+    def check_advice(self, advice: dict) -> None:
+        """Alert when a stock's call changes to BUY or SELL (the first call per stock only sets a baseline)."""
+        symbol, action = advice["symbol"], advice["action"]
+        previous = self._advice.get(symbol)
+        self._advice[symbol] = action
+        if previous is None or previous == action or action not in ("buy", "sell"):
+            return
+        if not self.settings["advice_alerts"]:
+            return
+        self.raise_alert(
+            "success" if action == "buy" else "danger",
+            "advice",
+            f"{symbol}: {advice['headline']}",
+            " ".join(advice["reasons"]),
+            symbol,
+        )
+
+    def advice_summary(self, advice: list[dict]) -> None:
+        for item in advice:
+            self._advice[item["symbol"]] = item["action"]
+        buys = [a["symbol"] for a in advice if a["action"] == "buy"]
+        sells = [a["symbol"] for a in advice if a["action"] == "sell"]
+        if not self.settings["advice_alerts"] or not (buys or sells):
+            return
+        parts = ([f"BUY {', '.join(buys)}"] if buys else []) + ([f"SELL {', '.join(sells)}"] if sells else [])
+        self.raise_alert(
+            "info",
+            "advice",
+            "Today's calls: " + " · ".join(parts),
+            "Based on the SMA trend and what the big traders you follow disclosed. Open a stock to see why.",
+        )
