@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 from datetime import date
 
+from lumibot.entities import Order
 from lumibot.strategies.strategy import Strategy
 
 
@@ -73,6 +74,7 @@ class SmaCrossover(Strategy):
 
         self.iteration_cash = float(self.get_cash())
         self.iteration_new_positions = 0
+        self.pending_orders = self._pending_orders()
         for symbol in self.universe():
             signal = self.sma_signal(symbol)
             if signal is None:
@@ -125,7 +127,12 @@ class SmaCrossover(Strategy):
         if self.halted_for_day:
             self.log_message(f"Skip BUY {symbol}: daily loss limit reached", color="yellow")
             return
-        open_positions = sum(1 for p in self.get_positions() if p.quantity > 0) + self.iteration_new_positions
+        if symbol in self.pending_orders:
+            self.log_message(f"Skip BUY {symbol}: {self.pending_orders[symbol]} order still open", color="yellow")
+            return
+        held = {p.asset.symbol for p in self.get_positions() if p.quantity > 0}
+        pending_buys = {s for s, side in self.pending_orders.items() if side == "buy" and s not in held}
+        open_positions = len(held) + len(pending_buys) + self.iteration_new_positions
         if open_positions >= int(self.parameters["max_open_positions"]):
             self.log_message(f"Skip BUY {symbol}: max open positions reached", color="yellow")
             return
@@ -136,6 +143,7 @@ class SmaCrossover(Strategy):
             self.log_message(f"Skip BUY {symbol}: not enough cash/position budget", color="yellow")
             return
         self.submit_order(self.create_order(symbol, quantity, "buy"))
+        self.pending_orders[symbol] = "buy"
         self.iteration_cash -= quantity * price
         self.iteration_new_positions += 1
         self.log_message(f"BUY {quantity} {symbol} @ ~{price:.2f}: {reason}", color="green")
@@ -144,8 +152,19 @@ class SmaCrossover(Strategy):
         quantity = self.held_quantity(symbol)
         if quantity <= 0:
             return
+        if symbol in self.pending_orders:
+            self.log_message(f"Skip SELL {symbol}: {self.pending_orders[symbol]} order still open", color="yellow")
+            return
         self.submit_order(self.create_order(symbol, quantity, "sell"))
+        self.pending_orders[symbol] = "sell"
         self.log_message(f"SELL {quantity:g} {symbol}: {reason}", color="red")
+
+    def _pending_orders(self) -> dict[str, str]:
+        """Symbol -> side ("buy"/"sell") of orders submitted but not yet filled or cancelled."""
+        pending = {}
+        for order in self.get_orders(statuses=Order.ACTIVE_STATUSES):
+            pending[order.asset.symbol] = "buy" if order.is_buy_order() else "sell"
+        return pending
 
     def _start_new_day(self) -> None:
         self.trading_day = self.get_datetime().date()
