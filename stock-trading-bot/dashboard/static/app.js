@@ -934,9 +934,9 @@ function bindPushSettings() {
 function renderAccounts() {
   const sel = $("#account-select");
   sel.classList.toggle("hidden", !isT212());
-  sel.innerHTML = S.accounts.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}${v.bot.running ? " · bot on" : ""}</option>`).join("")
+  sel.innerHTML = (S.accounts.length ? "" : `<option value="" disabled>No account yet</option>`) + S.accounts.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}${v.bot.running ? " · bot on" : ""}</option>`).join("")
     + `<option value="__add">+ Add practice account…</option>` + (S.accounts.some((v) => !v.from_env) ? `<option value="__manage">Manage accounts…</option>` : "");
-  sel.value = S.accountId || "__add";
+  sel.value = S.accountId || "";
 }
 function applyAccount() {
   const v = curView();

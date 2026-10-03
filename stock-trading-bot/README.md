@@ -22,9 +22,10 @@ This directory is standalone and does not use any of the Solana/crypto code in t
 | `run_backtest.py` | Backtest on Yahoo Finance history and print performance stats |
 | `run_live.py` | Run live on your Alpaca **paper** or Trading 212 **practice** account |
 | `trading212/` | Trading 212 practice API client, Lumibot broker, and the ledger of shares the bot bought |
-| `tests/` | Trading 212 tests against a local fake server (`python -m unittest discover -s tests -t .`) |
+| `tests/` | Trading 212 (local fake server), login, multi-account, push and bot-restart tests (`python -m unittest discover -s tests -t .`) |
 | `show_signals.py` | Just print what the people you follow recently bought/sold (no trading) |
 | `run_dashboard.py` / `dashboard/` | Browser **command center**: live prices, charts, alerts + pop-ups, paper account, bot controls |
+| `deploy/oracle/install.sh` | One-command install on an Ubuntu cloud server (Oracle Always Free): systemd + Caddy HTTPS |
 
 ## 1. Setup
 
@@ -174,7 +175,8 @@ python run_dashboard.py            # opens http://localhost:8000
 python run_dashboard.py --no-browser --port 8080
 ```
 
-A live dashboard for everything above. It runs on your machine only (listens on `127.0.0.1`).
+A live dashboard for everything above. It runs on your machine only (listens on `127.0.0.1`); see
+section 7 to run it on an always-on cloud server and open it from your phones.
 
 - **Live prices:** watchlist + SPY/QQQ/DIA stream tick-by-tick from Yahoo Finance's websocket (with a
   60-second REST fallback), including pre-market and after-hours. The "Live" dot in the top bar shows
@@ -210,8 +212,107 @@ A live dashboard for everything above. It runs on your machine only (listens on 
 Without Alpaca keys, live prices, charts, big-trader moves and alerts still work; account and bot
 sections show setup steps instead.
 
-Keep the tab open (it can be in the background) to receive pop-ups. Yahoo data is for information only
+Keep the tab open (it can be in the background) to receive pop-ups, or turn on notifications on the
+cloud install to get them with it closed. Yahoo data is for information only
 and can occasionally lag; your paper orders fill at Alpaca's prices.
+
+### Multiple practice accounts, login and phone notifications
+
+- **Several Trading 212 practice accounts:** the account menu in the top bar switches between them and
+  has **+ Add practice account…** (paste a practice API key and secret) and **Manage accounts…**. Each
+  account has its own bot (start/stop separately), its own record of the bot's shares
+  (`.cache/trading212/accounts/<id>/`), and its own balance, positions and orders. A bot can only ever
+  trade, and sell, in its own account. The account from `.env` is always the first one. Every account is
+  checked against Trading 212's practice server before it's saved; real-money keys don't work there.
+  Added keys are saved in `.cache/trading212/accounts.json`, readable only by the user running the app.
+- **Bots keep running:** a bot you started is remembered and starts again by itself after a restart of
+  the command center or the server. If a bot that has been running for a while stops unexpectedly, it is
+  restarted after a minute (and you get a notification); if it crashes straight away it is left off so
+  you can look at its log. Restarts never resend an order that didn't get a clear answer.
+- **Password:** set `DASHBOARD_PASSWORD` in `.env` to open the command center from other devices.
+  Without one it only answers on this computer (`http://localhost`). You stay signed in for 90 days on
+  each device; changing the password signs every device out. After 5 wrong passwords an address is
+  locked out for 15 minutes. **Sign out** is in the gear menu.
+- **Install it as an app:** on the `https://` address of your cloud install (section 7):
+  - **iPhone/iPad:** open it in **Safari** &rarr; Share button &rarr; **Add to Home Screen**, then open
+    it from the new icon. iPhones only allow notifications for apps added to the home screen (iOS 16.4+).
+  - **Android:** open it in **Chrome** &rarr; &#8942; menu &rarr; **Install app** (or Add to Home screen).
+- **Notifications when it's closed:** open the gear menu &rarr; *This device* &rarr; **Turn on** and allow
+  notifications. Do this on each phone or computer. You then get buy/sell calls, big-trader filings, your
+  price alerts, and bot orders, fills, cancellations and errors even with the app closed and the phone
+  locked. **Send test** checks it works. With several accounts, tick which accounts' bot and order alerts
+  this device gets (buy/sell calls and big-trader alerts go to every device). Notifications contain the
+  alert text only, never your keys.
+
+## 7. Run it 24/7 on a free Oracle Cloud server
+
+This puts the command center and the bots on a small computer in Oracle's cloud that stays on all the
+time, so trading and notifications continue with your phones and laptop off. Oracle's "Always Free"
+tier costs nothing; sign-up asks for a card to check you're a real person.
+
+**1. Create the account.** Go to https://www.oracle.com/cloud/free/ &rarr; *Start for free*. Choose a
+home region close to you (it can't be changed later).
+
+**2. Create the server.** In the Oracle Cloud console: &#9776; menu &rarr; *Compute* &rarr; *Instances*
+&rarr; **Create instance**.
+- *Image and shape* &rarr; *Edit*: image **Canonical Ubuntu 24.04**; shape **Ampere VM.Standard.A1.Flex**
+  with 1 OCPU and 6 GB memory (both marked *Always Free-eligible*). If it says "out of capacity", try
+  another *Availability domain*, or pick **VM.Standard.E2.1.Micro** instead (the install script adds
+  swap space for its small memory).
+- *Networking*: keep "Create new virtual cloud network" and "Create new public subnet", and make sure
+  **Assign a public IPv4 address** is on.
+- *Add SSH keys*: **Generate a key pair for me** &rarr; **Save private key** (keep this file safe).
+- **Create**, wait until it shows *Running*, and note the **Public IP address**.
+
+**3. Open the web ports.** On the instance page click the **subnet** link &rarr; *Security* (or
+*Security Lists*) &rarr; the *Default Security List* &rarr; **Add Ingress Rules**: source CIDR
+`0.0.0.0/0`, IP protocol TCP, destination port range `80,443` &rarr; **Add Ingress Rules**.
+
+**4. Connect to the server.** From a computer's terminal (Terminal on Mac, PowerShell on Windows):
+
+```bash
+chmod 600 ~/Downloads/ssh-key-*.key        # Mac/Linux only
+ssh -i ~/Downloads/ssh-key-*.key ubuntu@YOUR.PUBLIC.IP
+```
+
+(Or use the *Cloud Shell* button at the top of the Oracle console: upload the key from its menu, then
+run the same `ssh` command.) Type `yes` the first time.
+
+**5. Install.** On the server, run this, choosing your own long password:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ibss12/solana-copy-sniper-mev-trading-bot/master/stock-trading-bot/deploy/oracle/install.sh \
+  | sudo STOCKBOT_PASSWORD='choose-a-long-password' bash
+```
+
+It takes about 5–10 minutes and ends by printing your address, e.g. `https://132-145-1-2.sslip.io`
+(a free name that points at your server's IP, so no domain is needed; HTTPS certificates are set up
+automatically by Caddy). To use your own domain, point it at the IP and add
+`STOCKBOT_DOMAIN=bot.example.com` before `bash`. (Before this PR is merged, add
+`STOCKBOT_BRANCH=devin/1790776916-lumibot-stock-bot` and use that branch name instead of `master` in
+the URL.)
+
+**6. Use it.** Open the address on each phone, sign in, install it to the home screen and turn on
+notifications (section 6 above), then **+ Add practice account…** and start the bot for each account.
+The bot then trades your practice accounts around the clock, and the trades appear in the Trading 212
+app as usual.
+
+What the script sets up, and how to look after it:
+- The app lives in `/opt/stockbot` and runs as a `stockbot` system user under systemd
+  (`stockbot.service`, restarted automatically if it stops and started at boot). It listens only on
+  `127.0.0.1:8000`; Caddy serves it to the internet over HTTPS on ports 80/443, and the server's
+  firewall (iptables) is opened for just those two ports.
+- Settings: `/opt/stockbot/app/stock-trading-bot/.env` (password, `BROKER=trading212`, `PUBLIC_URL`).
+  Edit with `sudo nano` and apply with `sudo systemctl restart stockbot`. Other API keys (Quiver,
+  `SEC_USER_AGENT`) go there too. Accounts, bot records, push keys and settings are in `.cache/` next to
+  it and survive updates.
+- **Update:** gear menu &rarr; **Update app** (pulls the latest code, installs packages, restarts), or
+  run the install command again (without `STOCKBOT_PASSWORD` it keeps your password).
+- **Logs:** `sudo journalctl -u stockbot -f`. Status: `systemctl status stockbot caddy`.
+- If the page doesn't load: check the ingress rules from step 3, and that `curl -I http://localhost:8000/login`
+  on the server answers.
+- Oracle may reclaim Always Free servers that sit almost completely idle for a week; upgrading the
+  account to *Pay As You Go* (still free for these resources) avoids that.
 
 ## Disclaimer
 
