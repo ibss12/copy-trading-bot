@@ -2,7 +2,7 @@
 # One-command install of the stock command center on an Ubuntu 22.04/24.04 server
 # (made for Oracle Cloud "Always Free"; works on any Ubuntu VM). Safe to run again to update.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ibss12/solana-copy-sniper-mev-trading-bot/master/stock-trading-bot/deploy/oracle/install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/ibss12/copy-trading-bot/master/stock-trading-bot/deploy/oracle/install.sh \
 #     | sudo STOCKBOT_PASSWORD='pick-a-long-password' bash
 #
 # Settings (environment variables):
@@ -12,7 +12,7 @@
 #   STOCKBOT_BRANCH    branch               (default: master)
 set -euo pipefail
 
-REPO="${STOCKBOT_REPO:-https://github.com/ibss12/solana-copy-sniper-mev-trading-bot.git}"
+REPO="${STOCKBOT_REPO:-https://github.com/ibss12/copy-trading-bot.git}"
 BRANCH="${STOCKBOT_BRANCH:-master}"
 APP_USER=stockbot
 APP_HOME=/opt/stockbot

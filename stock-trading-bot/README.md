@@ -281,7 +281,7 @@ run the same `ssh` command.) Type `yes` the first time.
 **5. Install.** On the server, run this, choosing your own long password:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ibss12/solana-copy-sniper-mev-trading-bot/master/stock-trading-bot/deploy/oracle/install.sh \
+curl -fsSL https://raw.githubusercontent.com/ibss12/copy-trading-bot/master/stock-trading-bot/deploy/oracle/install.sh \
   | sudo STOCKBOT_PASSWORD='choose-a-long-password' bash
 ```
 
