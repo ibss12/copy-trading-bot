@@ -201,7 +201,7 @@ input:focus, select:focus { border-color: var(--blue); }
 .console .warn { color: var(--amber); }
 
 /* toasts */
-.toasts { position: fixed; top: 74px; right: 20px; z-index: 50; display: flex; flex-direction: column; gap: 10px; width: 360px; }
+.toasts { position: fixed; top: 74px; right: 20px; z-index: 70; display: flex; flex-direction: column; gap: 10px; width: 360px; }
 .toast { display: flex; gap: 12px; padding: 14px; border-radius: 12px; background: #182238; border: 1px solid var(--line); border-left: 4px solid var(--blue); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); animation: toastin 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2); cursor: pointer; }
 .toast.success { border-left-color: var(--green); }
 .toast.danger { border-left-color: var(--red); }
@@ -306,9 +306,19 @@ body.focus-mode { overflow: hidden; }
   .grid > .panel { min-width: 0; }
   .brand { min-width: 0; }
   .live span { display: none; }
-  .account-select { max-width: 116px; padding: 0 6px; }
+  .topbar { flex-wrap: wrap; row-gap: 8px; }
+  .panel-head { flex-wrap: wrap; }
+  .table-wrap { overflow-x: auto; }
+  .top-actions { margin-left: auto; }
+  .account-select { max-width: 110px; padding: 0 6px; }
   .watchlist th:nth-child(4), .watchlist td:nth-child(4) { display: none; }
   .chart-head { flex-wrap: wrap; gap: 8px; }
   .stats { grid-template-columns: repeat(3, 1fr); }
   .trade-bar { flex-wrap: wrap; gap: 10px; }
+}
+@media (max-width: 480px) {
+  .brand-name { display: none; }
+  .top-actions { gap: 4px; }
+  .icon-btn { width: 32px; height: 32px; }
+  .account-select { max-width: 100px; }
 }

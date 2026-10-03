@@ -201,9 +201,13 @@ async function initPush() {
   if (dev.subscribed) Object.assign(S.push, { endpoint: sub.endpoint, accounts: dev.accounts });
   else await subscribePush(null);
 }
+function serviceWorkerReady() {
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("The app's background helper didn't start. Reload the page and try again.")), 10000));
+  return Promise.race([navigator.serviceWorker.ready, timeout]);
+}
 async function subscribePush(accounts) {
   if (!S.push.supported || !S.config.push_key) return false;
-  const reg = await navigator.serviceWorker.ready;
+  const reg = await serviceWorkerReady();
   let sub = await reg.pushManager.getSubscription();
   if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(S.config.push_key) });
   const device = `${isIos() ? "iPhone/iPad" : /android/i.test(navigator.userAgent) ? "Android" : "Computer"} · ${new Date().toLocaleDateString()}`;
@@ -213,7 +217,7 @@ async function subscribePush(accounts) {
   return true;
 }
 async function unsubscribePush() {
-  const reg = await navigator.serviceWorker.ready;
+  const reg = await serviceWorkerReady();
   const sub = await reg.pushManager.getSubscription();
   if (sub) { await api("/api/push/unsubscribe", "POST", { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
   Object.assign(S.push, { endpoint: null, accounts: null });
@@ -916,7 +920,7 @@ function bindPushSettings() {
     if (Notification.permission !== "granted") await enablePopups(); else await subscribePush(null).catch((e) => notifyError(e.message));
     settingsModal();
   });
-  body.querySelector("[data-push-off]")?.addEventListener("click", async () => { await unsubscribePush(); settingsModal(); });
+  body.querySelector("[data-push-off]")?.addEventListener("click", async () => { await unsubscribePush().catch((e) => notifyError(e.message)); settingsModal(); });
   body.querySelector("[data-push-test]")?.addEventListener("click", () => api("/api/push/test", "POST", { endpoint: S.push.endpoint })
     .then(() => toast({ level: "info", title: "Test sent", message: "It should arrive in a few seconds." }, 3000)).catch((e) => notifyError(e.message)));
   body.querySelector("[data-logout]")?.addEventListener("click", async () => { await api("/api/logout", "POST"); location.href = "/login"; });
