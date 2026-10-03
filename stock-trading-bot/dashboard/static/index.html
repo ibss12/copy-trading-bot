@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Command Center</title>
+  <meta name="theme-color" content="#0b0f17" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/static/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Command Center" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">
+        <svg viewBox="0 0 32 32"><path d="M5 23l7-7 5 5 9-11" /></svg>
+      </div>
+      <div>
+        <div class="brand-name">Command Center</div>
+        <div class="brand-sub" id="brand-sub">Paper trading &middot; live data</div>
+      </div>
+    </div>
+    <div class="market-block">
+      <span id="market-pill" class="pill">Loading&hellip;</span>
+      <span id="market-countdown" class="muted small"></span>
+    </div>
+    <div id="tape" class="tape"></div>
+    <div class="top-actions">
+      <select id="account-select" class="account-select hidden" title="Which Trading 212 practice account you're looking at"></select>
+      <span id="live" class="live" title="Live data connection"><i></i><span>Connecting</span></span>
+      <button id="btn-notify" class="icon-btn" title="Pop-up alerts">
+        <svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </button>
+      <button id="btn-sound" class="icon-btn" title="Alert sounds">
+        <svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path class="wave" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
+      </button>
+      <button id="btn-settings" class="icon-btn" title="Alert settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68 1.65 1.65 0 0 0 10 3.17V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="notify-banner" class="banner hidden">
+    <div>
+      <strong>Turn on pop-up alerts</strong>
+      <span class="muted">Get a desktop pop-up for big price moves, buy/sell signals, big-trader filings and bot trades, even when this tab is in the background.</span>
+    </div>
+    <div class="banner-actions">
+      <button id="banner-enable" class="btn primary">Turn on pop-ups</button>
+      <button id="banner-dismiss" class="btn ghost">Not now</button>
+    </div>
+  </div>
+
+  <section class="kpis" id="kpis"></section>
+
+  <main class="grid">
+    <section class="panel watchlist-panel" data-panel="watchlist">
+      <div class="panel-head">
+        <h2>Watchlist</h2>
+        <form id="add-symbol" class="add-symbol">
+          <input id="add-symbol-input" placeholder="Add ticker e.g. PLTR" maxlength="10" autocomplete="off" />
+          <button class="btn primary sm" type="submit">Add</button>
+        </form>
+      </div>
+      <div class="table-wrap">
+        <table class="watchlist">
+          <thead><tr><th>Symbol</th><th class="r">Price</th><th class="r">Today</th><th>Intraday</th><th>Signal</th><th class="dcol r">Open</th><th class="dcol r">High</th><th class="dcol r">Low</th><th class="dcol r">Prev close</th><th class="dcol r">Volume</th><th class="dcol r">20-day avg</th><th class="dcol r">50-day avg</th><th class="dcol r">vs 50-day</th><th></th></tr></thead>
+          <tbody id="watchlist-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel chart-panel" data-panel="chart">
+      <div class="panel-head chart-head">
+        <div>
+          <div class="chart-title"><span id="chart-symbol">&mdash;</span> <span id="chart-trend" class="badge"></span></div>
+          <div class="chart-price"><span id="chart-price">&mdash;</span> <span id="chart-change"></span></div>
+        </div>
+        <div class="ranges" id="ranges">
+          <button data-range="1D" class="active">1D</button><button data-range="5D">5D</button><button data-range="1M">1M</button><button data-range="6M">6M</button><button data-range="1Y">1Y</button><button data-range="2Y">2Y</button>
+        </div>
+      </div>
+      <div class="chart-body">
+        <div class="chart-main">
+          <div class="chart-box">
+            <canvas id="chart"></canvas>
+            <div id="chart-tip" class="chart-tip hidden"></div>
+            <div id="chart-loading" class="chart-loading">Loading chart&hellip;</div>
+          </div>
+          <div class="chart-legend" id="chart-legend"></div>
+          <div class="stats" id="chart-stats"></div>
+          <div class="trade-bar">
+            <div class="trade-left">
+              <label class="muted small" for="trade-qty">Shares</label>
+              <input id="trade-qty" type="number" min="1" step="1" value="1" />
+              <button id="btn-buy" class="btn buy">Buy</button>
+              <button id="btn-sell" class="btn sell">Sell</button>
+            </div>
+            <button id="btn-price-alert" class="btn ghost">
+              <svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/></svg> Set price alert
+            </button>
+          </div>
+        </div>
+        <aside id="chart-details" class="details"></aside>
+      </div>
+    </section>
+
+    <section class="panel alerts-panel" data-panel="alerts">
+      <div class="panel-head">
+        <h2>Alerts <span id="unread" class="count hidden">0</span></h2>
+        <div class="head-actions">
+          <button id="btn-test-alert" class="btn ghost sm">Test pop-up</button>
+          <button id="btn-clear-alerts" class="btn ghost sm">Mark read</button>
+        </div>
+      </div>
+      <div class="chips" id="alert-filters">
+        <button data-f="all" class="active">All</button>
+        <button data-f="move">Price moves</button>
+        <button data-f="sma">Buy/Sell signals</button>
+        <button data-f="big_trader">Big traders</button>
+        <button data-f="trades">Trades</button>
+      </div>
+      <div id="alerts-list" class="alerts-list"></div>
+    </section>
+
+    <section class="panel traders-panel" data-panel="traders">
+      <div class="panel-head">
+        <h2>Big-trader moves</h2>
+        <button id="btn-refresh-signals" class="btn ghost sm">Refresh</button>
+      </div>
+      <div id="follows" class="follows"></div>
+      <div id="scores" class="scores"></div>
+      <div id="signals-list" class="signals-list"></div>
+    </section>
+
+    <section class="panel positions-panel" data-panel="positions">
+      <div class="panel-head">
+        <div class="tabs" id="pos-tabs">
+          <button data-tab="positions" class="active">Positions</button>
+          <button data-tab="orders">Open orders</button>
+          <button data-tab="activity">Recent fills</button>
+        </div>
+      </div>
+      <div id="positions-body" class="table-wrap"></div>
+    </section>
+
+    <section class="panel bot-panel" data-panel="bot">
+      <div class="panel-head">
+        <h2>Trading bot</h2>
+        <span id="bot-pill" class="pill">Stopped</span>
+      </div>
+      <div class="bot-controls">
+        <select id="bot-strategy">
+          <option value="smart_money">Smart money + SMA</option>
+          <option value="sma">SMA crossover only</option>
+        </select>
+        <button id="btn-bot-start" class="btn primary">Start bot</button>
+        <button id="btn-bot-stop" class="btn sell">Stop bot</button>
+      </div>
+      <div id="bot-info" class="muted small"></div>
+      <pre id="bot-log" class="console"></pre>
+    </section>
+  </main>
+
+  <div id="focus-backdrop" class="focus-backdrop hidden"></div>
+  <div id="toasts" class="toasts"></div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="modal-title"></h3><button class="icon-btn" data-close>&times;</button></div>
+      <div id="modal-body" class="modal-body"></div>
+      <div id="modal-foot" class="modal-foot"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
