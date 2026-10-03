@@ -10,6 +10,7 @@ from datetime import datetime
 
 import config
 from dashboard.market import NY
+from trading212.accounts import AccountProfile
 from trading212.broker import order_side, order_ticker
 from trading212.client import OrderUncertain, Trading212Error, symbol_from_ticker, validate_base_url
 from trading212.ledger import split_position
@@ -31,15 +32,25 @@ class Trading212Account:
     label = "Trading 212 practice account"
     refresh_seconds = 15
 
-    def __init__(self):
-        self.enabled = bool(config.TRADING212_API_KEY and config.TRADING212_API_SECRET)
+    def __init__(self, profile: AccountProfile | None = None):
+        self.id = profile.id if profile else "default"
+        self.name = profile.name if profile else config.TRADING212_ACCOUNT_NAME
+        if profile:
+            self.label = profile.label
+        self._day_start_path = profile.day_start_path if profile else DAY_START_PATH
+        key, secret = (
+            (profile.api_key, profile.api_secret)
+            if profile
+            else (config.TRADING212_API_KEY, config.TRADING212_API_SECRET)
+        )
+        self.enabled = bool(key and secret)
         self.error: str | None = None
-        self.ledger = bot_ledger()
+        self.ledger = profile.ledger() if profile else bot_ledger()
         self._client = None
         if self.enabled:
             try:
-                validate_base_url(config.TRADING212_BASE_URL)
-                self._client = practice_client()
+                validate_base_url(profile.base_url if profile else config.TRADING212_BASE_URL)
+                self._client = profile.client() if profile else practice_client()
             except (ValueError, Trading212Error) as exc:
                 self.enabled = False
                 self.error = str(exc)
@@ -60,13 +71,13 @@ class Trading212Account:
     def _day_start(self, equity: float) -> float:
         today = datetime.now(NY).date().isoformat()
         try:
-            saved = json.loads(DAY_START_PATH.read_text())
+            saved = json.loads(self._day_start_path.read_text())
         except (OSError, ValueError):
             saved = {}
         if saved.get("date") != today:
             saved = {"date": today, "equity": equity}
-            DAY_START_PATH.parent.mkdir(parents=True, exist_ok=True)
-            DAY_START_PATH.write_text(json.dumps(saved))
+            self._day_start_path.parent.mkdir(parents=True, exist_ok=True)
+            self._day_start_path.write_text(json.dumps(saved))
         return float(saved["equity"])
 
     def _order_dict(self, row: dict, fill: dict | None = None) -> dict:

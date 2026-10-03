@@ -33,10 +33,18 @@ class AlertEngine:
         self._trend: dict[str, str] = {}
         self._fast_sent: dict[str, float] = {}
         self._seen_signals: set[str] = set()
-        self._seen_orders: set[str] | None = None
+        self._seen_orders: dict[str, set[str]] = {}
         self._advice: dict[str, str] = {}
 
-    def raise_alert(self, level: str, category: str, title: str, message: str, symbol: str | None = None) -> dict:
+    def raise_alert(
+        self,
+        level: str,
+        category: str,
+        title: str,
+        message: str,
+        symbol: str | None = None,
+        account: str | None = None,
+    ) -> dict:
         alert = {
             "id": next(self._ids),
             "ts": int(time.time() * 1000),
@@ -45,6 +53,7 @@ class AlertEngine:
             "symbol": symbol,
             "title": title,
             "message": message,
+            "account": account,
         }
         self.history.appendleft(alert)
         self.emit(alert)
@@ -176,7 +185,7 @@ class AlertEngine:
 
     # --- bot + account ------------------------------------------------------------
 
-    def check_bot_line(self, line: str) -> None:
+    def check_bot_line(self, line: str, account: str | None = None, account_name: str = "") -> None:
         if not self.settings["bot_alerts"]:
             return
         for pattern, level, title in BOT_PATTERNS:
@@ -185,7 +194,14 @@ class AlertEngine:
                 text = match.group(1).strip()
                 tokens = text.split()
                 symbol = {"BUY": 2, "SELL": 2, "ALERT": 1}.get(tokens[0])
-                self.raise_alert(level, "bot", title, text, tokens[symbol].rstrip(":") if symbol else None)
+                self.raise_alert(
+                    level,
+                    "bot",
+                    f"{title} ({account_name})" if account_name else title,
+                    text,
+                    tokens[symbol].rstrip(":") if symbol else None,
+                    account,
+                )
                 return
 
     def check_account(self, snapshot: dict) -> None:
@@ -194,13 +210,15 @@ class AlertEngine:
             return
         filled = {o["id"]: o for o in orders if o["status"] == "filled"}
         label = snapshot.get("label", "paper account")
-        if self._seen_orders is None:
-            self._seen_orders = set(filled)
+        account = snapshot.get("id")
+        seen = self._seen_orders.get(account)
+        if seen is None:
+            self._seen_orders[account] = set(filled)
             return
         for order_id, order in filled.items():
-            if order_id in self._seen_orders:
+            if order_id in seen:
                 continue
-            self._seen_orders.add(order_id)
+            seen.add(order_id)
             who = {"bot": "Bot's order filled", "you": "Your order filled"}.get(order.get("by"), "Order filled")
             self.raise_alert(
                 "success" if order["side"] == "buy" else "warning",
@@ -209,6 +227,7 @@ class AlertEngine:
                 f"{order['side'].capitalize()} {order['filled_qty']:g} {order['symbol']} "
                 f"at ${order['filled_avg_price']:,.2f} ({label}).",
                 order["symbol"],
+                account,
             )
 
     # --- buy/sell advice ----------------------------------------------------------

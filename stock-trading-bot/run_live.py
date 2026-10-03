@@ -11,18 +11,24 @@ from strategies import SmaCrossover, SmartMoneySma
 
 def make_broker():
     if config.BROKER == "trading212":
+        from trading212.accounts import AccountStore
         from trading212.broker import Trading212Broker
         from trading212.client import validate_base_url
-        from trading212.practice import bot_ledger, practice_client
 
-        if not (config.TRADING212_API_KEY and config.TRADING212_API_SECRET):
-            sys.exit("Set TRADING212_API_KEY and TRADING212_API_SECRET (practice account) in stock-trading-bot/.env")
+        profile = AccountStore().get(config.TRADING212_ACCOUNT)
+        if profile is None:
+            sys.exit(
+                "No Trading 212 practice account to trade: set TRADING212_API_KEY and TRADING212_API_SECRET "
+                "in stock-trading-bot/.env or add an account in the command center"
+            )
         try:
-            validate_base_url(config.TRADING212_BASE_URL)
+            validate_base_url(profile.base_url)
         except ValueError as exc:
             sys.exit(str(exc))
-        print("Trading on your Trading 212 PRACTICE account. The bot only ever sells shares it bought itself.")
-        return Trading212Broker(practice_client(), bot_ledger())
+        print(
+            f"Trading on your Trading 212 PRACTICE account '{profile.name}'. The bot only ever sells shares it bought itself."
+        )
+        return Trading212Broker(profile.client(), profile.ledger())
 
     from lumibot.brokers import Alpaca
 

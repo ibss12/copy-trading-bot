@@ -29,6 +29,8 @@ def _order_dict(order) -> dict:
 
 
 class PaperAccount:
+    id = "alpaca"
+    name = "Alpaca paper"
     provider = "alpaca"
     label = "Alpaca paper account"
     refresh_seconds = 5

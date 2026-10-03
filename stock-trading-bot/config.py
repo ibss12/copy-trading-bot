@@ -75,9 +75,21 @@ TRADING212_API_SECRET = _str("TRADING212_API_SECRET")
 TRADING212_DEMO_URL = "https://demo.trading212.com/api/v0"
 # Only the demo server (or a local test server) is accepted; see trading212/client.py.
 TRADING212_BASE_URL = _str("TRADING212_BASE_URL", TRADING212_DEMO_URL)
+# Name shown for the .env account. More practice accounts can be added in the command center.
+TRADING212_ACCOUNT_NAME = _str("TRADING212_ACCOUNT_NAME", "Practice account")
+# Which account a bot process trades (set by the command center; "default" = the .env keys).
+TRADING212_ACCOUNT = _str("TRADING212_ACCOUNT", "default")
 
 # Where the bot places its orders: "alpaca" (paper) or "trading212" (practice account).
 BROKER = _str("BROKER", "alpaca").lower()
+
+# --- Command center access ----------------------------------------------------
+# Password for the command center. Required whenever it can be reached from another device.
+DASHBOARD_PASSWORD = _str("DASHBOARD_PASSWORD")
+# Public https address when hosted (e.g. https://1-2-3-4.sslip.io). Used as the push contact.
+PUBLIC_URL = _str("PUBLIC_URL").rstrip("/")
+# Lets the command center update itself with `git pull` (set by the cloud install script).
+SELF_UPDATE = _bool("STOCKBOT_SELF_UPDATE", False)
 
 # --- What to trade -----------------------------------------------------------
 WATCHLIST = [symbol.upper() for symbol in _list("WATCHLIST", "AAPL,TSLA,MSFT,NVDA,AMZN,GOOGL,META")]
@@ -159,5 +171,7 @@ def validate() -> None:
 
 def broker_keys_configured() -> bool:
     if BROKER == "trading212":
-        return bool(TRADING212_API_KEY and TRADING212_API_SECRET)
+        from trading212.accounts import AccountStore
+
+        return bool(AccountStore().profiles())
     return bool(ALPACA_API_KEY and ALPACA_API_SECRET)

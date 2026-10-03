@@ -7,6 +7,10 @@ const S = {
   indexes: [],
   market: {},
   account: { enabled: false },
+  accounts: [],
+  accountId: localStorage.getItem("cc.account"),
+  botLogs: {},
+  push: { supported: false, endpoint: null, accounts: null },
   signals: { loading: true, signals: [], scores: {} },
   alerts: [],
   bot: {},
@@ -35,7 +39,9 @@ const signedMoney = (v) => (v > 0 ? "+" : "") + money(v);
 const am = (v, d = 2) => { const c = S.account.currency_symbol || "$"; return v == null || isNaN(v) ? "—" : (v < 0 ? "-" : "") + c + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }); };
 const signedAm = (v) => (v > 0 ? "+" : "") + am(v);
 const isT212 = () => S.config.broker === "trading212";
-const brokerLabel = () => S.config.broker_label || "Alpaca paper account";
+const brokerLabel = () => S.account.label || (isT212() ? "Trading 212 practice account" : "Alpaca paper account");
+const curView = () => S.accounts.find((v) => v.id === S.accountId) || S.accounts[0];
+const acctName = (id) => S.accounts.find((v) => v.id === id)?.name || "";
 const ADVICE = { buy: ["BUY", "up"], sell: ["SELL", "down"], hold: ["HOLD", "hold"], watch: ["WATCH", "neutral"] };
 function adviceBadge(adv) {
   if (!adv) return "";
@@ -65,6 +71,7 @@ async function api(path, method = "GET", body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && S.config.auth !== false) { location.href = "/login"; throw new Error("Please sign in"); }
   if (!res.ok) {
     const detail = Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join(", ") : data.detail;
     throw new Error(detail || res.statusText);
@@ -107,7 +114,8 @@ function beep(level) {
 
 function desktopPopup(alert) {
   if (!S.popups || !("Notification" in window) || Notification.permission !== "granted") return;
-  const n = new Notification(alert.title, { body: alert.message, tag: "cc-" + alert.id, icon: $("link[rel=icon]").href });
+  if (S.push.endpoint && pushWants(alert.account)) return; // this device gets it as a push notification
+  const n = new Notification(alert.title, { body: alert.message, tag: "cc-" + alert.id, icon: "/static/icons/icon-192.png" });
   n.onclick = () => { window.focus(); if (alert.symbol && S.quotes[alert.symbol]) selectSymbol(alert.symbol); n.close(); };
 }
 
@@ -130,20 +138,86 @@ function updateNotifyUi() {
   const granted = supported && Notification.permission === "granted";
   $("#btn-notify").classList.toggle("active", granted && S.popups);
   $("#btn-notify").title = !supported ? "Pop-ups not supported in this browser" : granted ? (S.popups ? "Pop-up alerts on (click to turn off)" : "Pop-up alerts off (click to turn on)") : "Turn on pop-up alerts";
-  const showBanner = supported && Notification.permission === "default" && localStorage.getItem("cc.bannerDismissed") !== "1";
+  const needsInstall = !supported && isIos() && !isStandalone();
+  const showBanner = (needsInstall || (supported && Notification.permission === "default")) && localStorage.getItem("cc.bannerDismissed") !== "1";
+  if (needsInstall) {
+    $("#notify-banner strong").textContent = "Get alerts on this iPhone";
+    $("#notify-banner .muted").textContent = "Add the command center to your home screen, then turn on notifications to get alerts even when it's closed.";
+    $("#banner-enable").textContent = "Show me how";
+  }
   $("#notify-banner").classList.toggle("hidden", !showBanner);
   $("#btn-sound").classList.toggle("active", S.sound);
   $("#btn-sound").classList.toggle("off", !S.sound);
 }
 
+const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+
+function installHelp() {
+  openModal("Install the app on your phone", `
+    <p style="margin-top:0">To get notifications on ${isIos() ? "iPhone" : "your phone"} even when the app is closed, add it to your home screen first:</p>
+    ${isIos()
+      ? `<ol><li>Open this page in <b>Safari</b></li><li>Tap the <b>Share</b> button (square with an arrow)</li><li>Tap <b>Add to Home Screen</b>, then <b>Add</b></li><li>Open <b>Command Center</b> from your home screen and tap the bell to turn on notifications</li></ol>`
+      : `<ol><li>Open this page in <b>Chrome</b></li><li>Tap the <b>&#8942;</b> menu &rarr; <b>Add to Home screen</b> (or <b>Install app</b>)</li><li>Open <b>Command Center</b> from your home screen and tap the bell to turn on notifications</li></ol>`}
+    <p class="muted small">Do this on each phone you want alerts on. Each phone can choose which accounts it hears about in Alert settings.</p>`,
+    [["OK", "primary", () => {}]]);
+}
+
 async function enablePopups() {
-  if (!("Notification" in window)) return notifyError("This browser doesn't support desktop pop-ups. You'll still get in-page alerts.");
+  if (!("Notification" in window)) {
+    if (isIos() && !isStandalone()) return installHelp();
+    return notifyError("This browser doesn't support pop-ups. You'll still get in-page alerts.");
+  }
   const result = await Notification.requestPermission();
   S.popups = result === "granted";
   localStorage.setItem("cc.popups", S.popups ? "on" : "off");
   updateNotifyUi();
-  if (S.popups) toast({ level: "success", title: "Pop-up alerts are on", message: "You'll get a desktop pop-up for every alert, even when this tab is in the background." });
-  else notifyError("Pop-ups are blocked. Allow notifications for this site in your browser's address bar settings.");
+  if (!S.popups) return notifyError("Notifications are blocked. Allow notifications for this site in your browser or phone settings.");
+  const pushed = await subscribePush(S.push.accounts).catch((e) => { console.warn(e); return false; });
+  toast({ level: "success", title: "Notifications are on", message: pushed
+    ? "This device now gets alerts even when the command center is closed."
+    : "You'll get a pop-up for every alert while the command center is open." });
+}
+
+// ---------- push notifications (work while the app is closed) ----------
+const pushWants = (account) => !account || S.push.accounts == null || S.push.accounts.includes(account);
+function b64ToBytes(b64) {
+  const s = atob((b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(s, (c) => c.charCodeAt(0));
+}
+async function initPush() {
+  S.push.supported = "serviceWorker" in navigator && "PushManager" in window && window.isSecureContext;
+  if (!("serviceWorker" in navigator) || !window.isSecureContext) return;
+  const reg = await navigator.serviceWorker.register("/sw.js");
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data?.type !== "open") return;
+    const sym = new URL(e.data.url).searchParams.get("symbol");
+    if (sym && S.quotes[sym]) selectSymbol(sym);
+  });
+  if (!S.push.supported) return;
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return;
+  const dev = await api("/api/push/device", "POST", { endpoint: sub.endpoint });
+  if (dev.subscribed) Object.assign(S.push, { endpoint: sub.endpoint, accounts: dev.accounts });
+  else await subscribePush(null);
+}
+async function subscribePush(accounts) {
+  if (!S.push.supported || !S.config.push_key) return false;
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(S.config.push_key) });
+  const device = `${isIos() ? "iPhone/iPad" : /android/i.test(navigator.userAgent) ? "Android" : "Computer"} · ${new Date().toLocaleDateString()}`;
+  const res = await api("/api/push/subscribe", "POST", { subscription: sub.toJSON(), accounts, device });
+  Object.assign(S.push, { endpoint: sub.endpoint, accounts: res.accounts });
+  updateNotifyUi();
+  return true;
+}
+async function unsubscribePush() {
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (sub) { await api("/api/push/unsubscribe", "POST", { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
+  Object.assign(S.push, { endpoint: null, accounts: null });
+  updateNotifyUi();
 }
 
 // ---------- rendering: top bar ----------
@@ -184,15 +258,16 @@ function renderKpis() {
   const a = S.account;
   const bot = S.bot;
   const botCard = `<div class="kpi"><div class="label">Trading bot</div><div class="value ${bot.running ? "up" : ""}">${bot.running ? "Running" : "Stopped"}</div>
-      <div class="sub">${bot.running ? "since " + new Date(bot.started_at).toLocaleTimeString() : bot.can_start ? "Ready to start" : isT212() ? "Needs Trading 212 practice keys" : "Needs Alpaca paper keys"}</div></div>`;
+      <div class="sub">${bot.running ? "since " + new Date(bot.started_at).toLocaleTimeString() : bot.can_start ? "Ready to start" : isT212() ? "Needs a Trading 212 practice account" : "Needs Alpaca paper keys"}</div></div>`;
   if (!a.enabled && isT212()) {
     $("#kpis").innerHTML = `<div class="kpi connect">
         <svg class="plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></svg>
         <div><div style="font-weight:700">Connect your Trading 212 practice account so the bot can trade and you can see your balance</div>
         <ol><li>In the Trading 212 app, switch to your <b>Practice</b> account (Invest or Stocks ISA)</li>
         <li>Settings &rarr; <b>API (Beta)</b> &rarr; Generate API key. Copy the key and secret.</li>
-        <li>Put them in <code>stock-trading-bot/.env</code> (<code>TRADING212_API_KEY</code>, <code>TRADING212_API_SECRET</code>) and restart <code>python run_dashboard.py</code>.</li></ol>
-        ${a.error ? `<div class="down small">${esc(a.error)}</div>` : ""}</div></div>` + botCard;
+        <li>${S.accounts.length ? "Check the key in <code>stock-trading-bot/.env</code>, or add the account again here." : "Tap <b>Add practice account</b> and paste them in."}</li></ol>
+        ${a.error ? `<div class="down small">${esc(a.error)}</div>` : ""}
+        <button class="btn primary sm" data-add-account style="margin-top:6px">Add practice account</button></div></div>` + botCard;
     return;
   }
   if (!a.enabled) {
@@ -698,7 +773,7 @@ function renderBot() {
   $("#btn-bot-stop").disabled = !b.running;
   $("#bot-strategy").disabled = b.running;
   $("#bot-info").innerHTML = !b.can_start
-    ? (isT212() ? "Add your Trading 212 <b>practice</b> API key and secret to <code>.env</code> to let the bot trade. It never connects to real money." : "Add your Alpaca <b>paper</b> keys to <code>.env</code> to let the bot trade. It never uses real money.")
+    ? (isT212() ? "Add a Trading 212 <b>practice</b> account (top bar &rarr; account menu) to let the bot trade. It never connects to real money." : "Add your Alpaca <b>paper</b> keys to <code>.env</code> to let the bot trade. It never uses real money.")
     : b.running ? `Trading your watchlist on your ${esc(brokerLabel())} (${b.strategy === "sma" ? "SMA crossover" : "smart money + SMA"}). Buys are capped at ${(S.config.max_position_pct * 100).toFixed(0)}% of the portfolio per stock.${isT212() ? " You get a pop-up for every bot trade, and it only sells shares it bought." : ""}`
     : `The bot checks your watchlist every 30 minutes and trades on your ${esc(brokerLabel())}.${isT212() ? " You can keep trading yourself; the bot never sells your shares." : ""}`;
   if (!$("#bot-log").childNodes.length) $("#bot-log").textContent = "";
@@ -764,8 +839,8 @@ function orderModal(side, sym, qty) {
     <div class="summary">${side === "buy" ? "Buy" : "Sell"} <b>${qty}</b> share${qty === 1 ? "" : "s"} of <b>${sym}</b> at market<br>
     <span class="muted">≈ ${money(est)} at ${money(q?.price)}${eq ? ` · ${weight.toFixed(1)}% of your portfolio` : ""}</span></div>
     ${over ? `<p class="down small">Heads up: that's more than the bot's ${(S.config.max_position_pct * 100).toFixed(0)}% per-stock limit.</p>` : ""}
-    <p class="muted small">This goes to your ${isT212() ? "Trading 212 <b>practice</b> account as <b>your own</b> trade (the bot won't count these shares as its own)" : "Alpaca <b>paper</b> account"}. No real money is used.${S.market.is_open ? "" : " The market is closed, so it will fill when it next opens."}</p>`,
-    [["Cancel", "ghost", () => {}], [`Confirm ${side}`, side, async () => { await api("/api/orders", "POST", { symbol: sym, qty, side }); }]]);
+    <p class="muted small">This goes to ${isT212() ? `<b>${esc(S.account.name || "your Trading 212 practice account")}</b> (Trading 212 <b>practice</b>) as <b>your own</b> trade (the bot won't count these shares as its own)` : "your Alpaca <b>paper</b> account"}. No real money is used.${S.market.is_open ? "" : " The market is closed, so it will fill when it next opens."}</p>`,
+    [["Cancel", "ghost", () => {}], [`Confirm ${side}`, side, async () => { await api("/api/orders", "POST", { symbol: sym, qty, side, account: S.accountId }); }]]);
 }
 
 function settingsModal() {
@@ -781,7 +856,8 @@ function settingsModal() {
     <label class="check"><input type="checkbox" id="st-big" ${s.big_trader_alerts ? "checked" : ""}/> New big-trader filings (funds, insiders, CEOs, Congress)</label>
     <label class="check"><input type="checkbox" id="st-bot" ${s.bot_alerts ? "checked" : ""}/> Bot trades and daily-loss limit</label>
     <div class="field" style="margin-top:10px"><label>Check for new filings every (minutes)</label><input id="st-refresh" type="number" min="5" value="${s.signal_refresh_minutes}" /></div>
-    <label class="check"><input type="checkbox" id="st-popups" ${S.popups ? "checked" : ""}/> Desktop pop-ups</label>
+    <label class="check"><input type="checkbox" id="st-popups" ${S.popups ? "checked" : ""}/> Pop-up notifications</label>
+    ${pushSettingsHtml()}
     <label class="check"><input type="checkbox" id="st-sound" ${S.sound ? "checked" : ""}/> Alert sounds</label>
     ${(s.price_alerts || []).length ? `<div class="field"><label>Price alerts</label>${s.price_alerts.map((r) => `<div class="rule ${r.triggered ? "done" : ""}"><span><b>${r.symbol}</b> ${r.op} ${money(r.price)} ${r.triggered ? "(triggered)" : ""}</span><button class="btn ghost sm" data-del-rule="${r.id}">Remove</button></div>`).join("")}</div>` : ""}`,
     [["Cancel", "ghost", () => {}], ["Save", "primary", async () => {
@@ -800,13 +876,116 @@ function settingsModal() {
       const wantPopups = $("#st-popups").checked;
       if (wantPopups && "Notification" in window && Notification.permission !== "granted") await enablePopups();
       else { S.popups = wantPopups; localStorage.setItem("cc.popups", S.popups ? "on" : "off"); }
+      if (S.push.endpoint && S.accounts.length > 1) {
+        const picked = [...document.querySelectorAll("[data-push-acct]")].filter((c) => c.checked).map((c) => c.dataset.pushAcct);
+        await subscribePush(picked.length === S.accounts.length ? null : picked);
+      }
       updateNotifyUi();
       toast({ level: "success", title: "Settings saved", message: "Your alert preferences are updated." }, 3000);
     }]]);
   $("#modal-body").querySelectorAll("[data-del-rule]").forEach((b) => b.onclick = async () => {
     await api(`/api/price-alerts/${b.dataset.delRule}`, "DELETE"); b.closest(".rule").remove();
   });
+  bindPushSettings();
 }
+
+function pushSettingsHtml() {
+  const on = Boolean(S.push.endpoint);
+  let html = `<div class="field" style="margin-top:10px"><label>This device</label>`;
+  if (!S.push.supported) {
+    html += `<span class="hint">${isIos() && !isStandalone() ? `Add the command center to your home screen to get notifications when it's closed. <button class="btn ghost sm" data-install-help>Show me how</button>` : window.isSecureContext ? "This browser can't receive notifications while the command center is closed." : "Notifications while closed need the https:// address of your cloud install."}</span>`;
+  } else {
+    html += `<div class="rule"><span>${on ? "Gets notifications even when the app is closed" : "Notifications only while the app is open"}</span>
+      ${on ? `<span><button class="btn ghost sm" data-push-test>Send test</button> <button class="btn ghost sm" data-push-off>Turn off</button></span>` : `<button class="btn primary sm" data-push-on>Turn on</button>`}</div>`;
+    if (on && S.accounts.length > 1) {
+      html += `<span class="hint">Accounts this device gets bot and order alerts for:</span>` + S.accounts.map((v) =>
+        `<label class="check"><input type="checkbox" data-push-acct="${esc(v.id)}" ${pushWants(v.id) ? "checked" : ""}/> ${esc(v.name)}</label>`).join("");
+    }
+  }
+  html += `</div>`;
+  const sys = [];
+  if (S.config.self_update) sys.push(`<button class="btn ghost sm" data-update-app>Update app</button>`);
+  if (S.config.auth) sys.push(`<button class="btn ghost sm" data-logout>Sign out</button>`);
+  if (sys.length) html += `<div class="field"><label>App</label><div>${sys.join(" ")}</div></div>`;
+  return html;
+}
+function bindPushSettings() {
+  const body = $("#modal-body");
+  body.querySelector("[data-install-help]")?.addEventListener("click", installHelp);
+  body.querySelector("[data-push-on]")?.addEventListener("click", async () => {
+    if (Notification.permission !== "granted") await enablePopups(); else await subscribePush(null).catch((e) => notifyError(e.message));
+    settingsModal();
+  });
+  body.querySelector("[data-push-off]")?.addEventListener("click", async () => { await unsubscribePush(); settingsModal(); });
+  body.querySelector("[data-push-test]")?.addEventListener("click", () => api("/api/push/test", "POST", { endpoint: S.push.endpoint })
+    .then(() => toast({ level: "info", title: "Test sent", message: "It should arrive in a few seconds." }, 3000)).catch((e) => notifyError(e.message)));
+  body.querySelector("[data-logout]")?.addEventListener("click", async () => { await api("/api/logout", "POST"); location.href = "/login"; });
+  body.querySelector("[data-update-app]")?.addEventListener("click", async (e) => {
+    e.target.disabled = true; e.target.textContent = "Updating… (can take a few minutes)";
+    try {
+      const res = await api("/api/system/update", "POST");
+      toast({ level: "success", title: "Updated, restarting", message: `${res.summary}. The page reloads in a moment.` });
+      setTimeout(() => location.reload(), 12000);
+    } catch (err) { notifyError(err.message); e.target.disabled = false; e.target.textContent = "Update app"; }
+  });
+}
+
+// ---------- accounts ----------
+function renderAccounts() {
+  const sel = $("#account-select");
+  sel.classList.toggle("hidden", !isT212());
+  sel.innerHTML = S.accounts.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}${v.bot.running ? " · bot on" : ""}</option>`).join("")
+    + `<option value="__add">+ Add practice account…</option>` + (S.accounts.some((v) => !v.from_env) ? `<option value="__manage">Manage accounts…</option>` : "");
+  sel.value = S.accountId || "__add";
+}
+function applyAccount() {
+  const v = curView();
+  S.accountId = v ? v.id : null;
+  if (v) localStorage.setItem("cc.account", v.id);
+  S.account = v ? v.state : { enabled: false };
+  S.bot = v ? v.bot : {};
+  const pre = $("#bot-log");
+  pre.textContent = "";
+  (v ? S.botLogs[v.id] || [] : []).forEach(appendLog);
+  if (v?.bot.strategy) $("#bot-strategy").value = v.bot.strategy;
+  renderAccounts(); renderKpis(); renderPositions(); renderBot(); renderChartHeader();
+}
+function addAccountModal() {
+  openModal("Add a Trading 212 practice account", `
+    <ol class="small" style="margin-top:0;padding-left:18px"><li>In the Trading 212 app, switch to the <b>Practice</b> account you want the bot to trade</li>
+    <li>Settings &rarr; <b>API (Beta)</b> &rarr; <b>Generate API key</b>. Allow account data, history, orders and portfolio access.</li>
+    <li>Copy the key and the secret here. Each account gets its own bot and its own record of which shares the bot bought.</li></ol>
+    <div class="field"><label>Name</label><input id="ac-name" maxlength="40" placeholder="e.g. My practice ISA" value="${S.accounts.length ? "" : "Practice account"}" /></div>
+    <div class="field"><label>API key</label><input id="ac-key" autocomplete="off" autocapitalize="off" spellcheck="false" /></div>
+    <div class="field"><label>API secret</label><input id="ac-secret" type="password" autocomplete="off" /></div>
+    <p class="muted small">Practice accounts only: real-money keys are refused. Keys stay on your server and are never shown again.</p>`,
+    [["Cancel", "ghost", () => {}], ["Add account", "primary", async () => {
+      const view = await api("/api/accounts", "POST", { name: $("#ac-name").value, api_key: $("#ac-key").value, api_secret: $("#ac-secret").value });
+      upsertView(view); S.accountId = view.id; applyAccount();
+      toast({ level: "success", title: `Added ${view.name}`, message: "Its balance and positions will load in a few seconds." }, 4000);
+    }]]);
+}
+function manageAccountsModal() {
+  openModal("Your accounts", `<p class="muted small" style="margin-top:0">Removing an account stops its bot and deletes its keys from the server. Nothing is sold.</p>
+    ${S.accounts.map((v) => `<div class="rule"><span><b>${esc(v.name)}</b>${v.from_env ? ' <span class="muted small">(from .env)</span>' : ""}</span>${v.from_env ? "" : `<button class="btn ghost sm" data-remove-acct="${esc(v.id)}">Remove</button>`}</div>`).join("")}`,
+    [["Done", "primary", () => {}]]);
+  $("#modal-body").querySelectorAll("[data-remove-acct]").forEach((b) => b.onclick = async () => {
+    if (!confirm(`Remove ${acctName(b.dataset.removeAcct)}? Its bot will stop.`)) return;
+    try { await api(`/api/accounts/${b.dataset.removeAcct}`, "DELETE"); b.closest(".rule").remove(); } catch (err) { notifyError(err.message); }
+  });
+}
+function upsertView(view) {
+  const i = S.accounts.findIndex((v) => v.id === view.id);
+  if (i >= 0) S.accounts[i] = view; else S.accounts.push(view);
+  if (view.bot_log && !S.botLogs[view.id]) S.botLogs[view.id] = view.bot_log.slice();
+}
+$("#account-select").addEventListener("change", (e) => {
+  const v = e.target.value;
+  if (v === "__add") { e.target.value = S.accountId || ""; return addAccountModal(); }
+  if (v === "__manage") { e.target.value = S.accountId || ""; return manageAccountsModal(); }
+  S.accountId = v; applyAccount();
+});
+$("#kpis").addEventListener("click", (e) => { if (e.target.closest("[data-add-account]")) addAccountModal(); });
 
 // ---------- events ----------
 $("#watchlist-body").addEventListener("click", async (e) => {
@@ -894,7 +1073,7 @@ $("#pos-tabs").addEventListener("click", (e) => {
 });
 $("#positions-body").addEventListener("click", async (e) => {
   const cancel = e.target.closest("[data-cancel]");
-  if (cancel) { try { await api(`/api/orders/${cancel.dataset.cancel}`, "DELETE"); toast({ level: "info", title: "Order cancelled", message: "" }, 3000); } catch (err) { notifyError(err.message); } return; }
+  if (cancel) { try { await api(`/api/orders/${cancel.dataset.cancel}?account=${encodeURIComponent(S.accountId || "")}`, "DELETE"); toast({ level: "info", title: "Order cancelled", message: "" }, 3000); } catch (err) { notifyError(err.message); } return; }
   const close = e.target.closest("[data-close-pos]");
   if (close) return orderModal("sell", close.dataset.closePos, Number(close.dataset.qty));
   const row = e.target.closest("tr[data-sym]");
@@ -906,10 +1085,10 @@ $("#btn-sell").onclick = () => { const qty = Number($("#trade-qty").value); if (
 $("#btn-price-alert").onclick = () => S.selected && priceAlertModal(S.selected);
 
 $("#btn-bot-start").onclick = () => openModal("Start the trading bot?", `
-  <p>The bot will trade your watchlist (<b>${S.watchlist.join(", ")}</b>) on your ${isT212() ? "Trading 212 <b>practice</b>" : "Alpaca <b>paper</b>"} account using the <b>${$("#bot-strategy").selectedOptions[0].text}</b> strategy.</p>
-  <p class="muted small">Each stock is capped at ${(S.config.max_position_pct * 100).toFixed(0)}% of the portfolio and new buys stop if the account is down ${(S.config.max_daily_loss_pct * 100).toFixed(1)}% on the day. No real money is used.</p>`,
-  [["Cancel", "ghost", () => {}], ["Start bot", "primary", async () => { await api("/api/bot/start", "POST", { strategy: $("#bot-strategy").value }); }]]);
-$("#btn-bot-stop").onclick = () => api("/api/bot/stop", "POST").catch((e) => notifyError(e.message));
+  <p>The bot will trade your watchlist (<b>${S.watchlist.join(", ")}</b>) on ${isT212() ? `<b>${esc(S.account.name || "your account")}</b> (Trading 212 <b>practice</b>)` : "your Alpaca <b>paper</b> account"} using the <b>${$("#bot-strategy").selectedOptions[0].text}</b> strategy.</p>
+  <p class="muted small">Each stock is capped at ${(S.config.max_position_pct * 100).toFixed(0)}% of the portfolio and new buys stop if the account is down ${(S.config.max_daily_loss_pct * 100).toFixed(1)}% on the day. It keeps running (and restarts after a server restart) until you stop it. No real money is used.</p>`,
+  [["Cancel", "ghost", () => {}], ["Start bot", "primary", async () => { await api("/api/bot/start", "POST", { strategy: $("#bot-strategy").value, account: S.accountId }); }]]);
+$("#btn-bot-stop").onclick = () => api("/api/bot/stop", "POST", { account: S.accountId }).catch((e) => notifyError(e.message));
 
 $("#btn-notify").onclick = async () => {
   if (!("Notification" in window)) return notifyError("This browser doesn't support desktop pop-ups.");
@@ -919,7 +1098,7 @@ $("#btn-notify").onclick = async () => {
 };
 $("#btn-sound").onclick = () => { S.sound = !S.sound; localStorage.setItem("cc.sound", S.sound ? "on" : "off"); updateNotifyUi(); if (S.sound) beep("success"); };
 $("#btn-settings").onclick = settingsModal;
-$("#banner-enable").onclick = enablePopups;
+$("#banner-enable").onclick = () => (!("Notification" in window) && isIos() && !isStandalone() ? installHelp() : enablePopups());
 $("#banner-dismiss").onclick = () => { localStorage.setItem("cc.bannerDismissed", "1"); updateNotifyUi(); };
 
 // ---------- live stream ----------
@@ -938,10 +1117,34 @@ function connect() {
   });
   es.addEventListener("alert", (e) => onAlert(JSON.parse(e.data)));
   es.addEventListener("market", (e) => { S.market = JSON.parse(e.data); renderMarket(); });
-  es.addEventListener("account", (e) => { S.account = JSON.parse(e.data); renderKpis(); renderPositions(); renderChartHeader(); });
+  es.addEventListener("account", (e) => {
+    const { id, state } = JSON.parse(e.data);
+    const v = S.accounts.find((x) => x.id === id);
+    if (!v) return;
+    v.state = state;
+    if (id === S.accountId) { S.account = state; renderKpis(); renderPositions(); renderChartHeader(); }
+  });
+  es.addEventListener("accounts", (e) => {
+    S.accounts = [];
+    JSON.parse(e.data).forEach(upsertView);
+    applyAccount();
+  });
   es.addEventListener("signals", (e) => { S.signals = JSON.parse(e.data); renderSignals(); renderWatchlist(); renderChartDetails(true); });
-  es.addEventListener("bot", (e) => { S.bot = JSON.parse(e.data); renderBot(); renderKpis(); });
-  es.addEventListener("bot_log", (e) => appendLog(JSON.parse(e.data)));
+  es.addEventListener("bot", (e) => {
+    const status = JSON.parse(e.data);
+    const v = S.accounts.find((x) => x.id === status.account);
+    if (!v) return;
+    v.bot = status;
+    renderAccounts();
+    if (v.id === S.accountId) { S.bot = status; renderBot(); renderKpis(); }
+  });
+  es.addEventListener("bot_log", (e) => {
+    const { account, line } = JSON.parse(e.data);
+    const log = (S.botLogs[account] = S.botLogs[account] || []);
+    log.push(line);
+    if (log.length > 400) log.shift();
+    if (account === S.accountId) appendLog(line);
+  });
   es.addEventListener("settings", (e) => { S.settings = JSON.parse(e.data); });
   es.addEventListener("watchlist", (e) => { S.watchlist = JSON.parse(e.data).filter((s) => S.quotes[s]); renderWatchlist(); });
 }
@@ -949,15 +1152,17 @@ function connect() {
 async function init() {
   const st = await api("/api/state");
   Object.assign(S, {
-    quotes: st.quotes, watchlist: st.watchlist, indexes: st.indexes, market: st.market, account: st.account,
-    signals: st.signals, alerts: st.alerts, bot: st.bot, settings: st.settings, config: st.config,
+    quotes: st.quotes, watchlist: st.watchlist, indexes: st.indexes, market: st.market,
+    signals: st.signals, alerts: st.alerts, settings: st.settings, config: st.config,
   });
   $("#bot-strategy").value = st.config.strategy;
   $("#brand-sub").innerHTML = `${isT212() ? "Trading 212 practice" : "Paper trading"} &middot; live data`;
-  st.bot_log.forEach(appendLog);
-  updateNotifyUi(); renderMarket(); renderTape(); renderKpis(); renderWatchlist(); renderAlerts(); renderSignals(); renderPositions(); renderBot();
-  const saved = localStorage.getItem("cc.selected");
+  st.accounts.forEach(upsertView);
+  applyAccount();
+  updateNotifyUi(); renderMarket(); renderTape(); renderWatchlist(); renderAlerts(); renderSignals();
+  const saved = new URLSearchParams(location.search).get("symbol") || localStorage.getItem("cc.selected");
   selectSymbol(S.quotes[saved] ? saved : S.watchlist[0] || S.indexes[0]);
+  initPush().catch((e) => console.warn("push setup failed", e)).finally(updateNotifyUi);
   addPanelTools();
   focusFromHash();
   connect();

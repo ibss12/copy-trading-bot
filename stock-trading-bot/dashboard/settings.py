@@ -17,7 +17,10 @@ DEFAULTS = {
     "advice_alerts": True,
     "signal_refresh_minutes": 60,
     "price_alerts": [],
+    # account id -> strategy for bots that should be running (restarted when the server restarts)
+    "running_bots": {},
 }
+PROTECTED = ("watchlist", "price_alerts", "running_bots")
 
 
 class Settings:
@@ -36,7 +39,7 @@ class Settings:
 
     def update(self, changes: dict) -> None:
         for key, value in changes.items():
-            if key in DEFAULTS and key not in ("watchlist", "price_alerts"):
+            if key in DEFAULTS and key not in PROTECTED:
                 self.data[key] = value
         self.save()
 
@@ -52,4 +55,11 @@ class Settings:
 
     def set_watchlist(self, symbols: list[str]) -> None:
         self.data["watchlist"] = list(dict.fromkeys(symbols))
+        self.save()
+
+    def set_bot_running(self, account_id: str, strategy: str | None) -> None:
+        bots = {k: v for k, v in self.data["running_bots"].items() if k != account_id}
+        if strategy:
+            bots[account_id] = strategy
+        self.data["running_bots"] = bots
         self.save()

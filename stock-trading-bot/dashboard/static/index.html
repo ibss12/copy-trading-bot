@@ -2,9 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Command Center</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%2322c55e'/><path d='M6 22l7-7 5 5 8-10' stroke='white' stroke-width='3' fill='none'/></svg>" />
+  <meta name="theme-color" content="#0b0f17" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/static/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Command Center" />
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
@@ -24,6 +31,7 @@
     </div>
     <div id="tape" class="tape"></div>
     <div class="top-actions">
+      <select id="account-select" class="account-select hidden" title="Which Trading 212 practice account you're looking at"></select>
       <span id="live" class="live" title="Live data connection"><i></i><span>Connecting</span></span>
       <button id="btn-notify" class="icon-btn" title="Pop-up alerts">
         <svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>

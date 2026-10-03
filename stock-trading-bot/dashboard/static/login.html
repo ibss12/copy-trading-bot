@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Sign in · Command Center</title>
+  <meta name="theme-color" content="#0b0f17" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/static/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Command Center" />
+  <link rel="stylesheet" href="/static/login.css" />
+</head>
+<body>
+  <form id="login" class="card">
+    <img src="/static/icons/icon-192.png" alt="" width="64" height="64" />
+    <h1>Command Center</h1>
+    <p>Enter your password to open your trading command center.</p>
+    <input id="password" type="password" autocomplete="current-password" placeholder="Password" required autofocus />
+    <button type="submit">Sign in</button>
+    <div id="error" class="error" role="alert"></div>
+    <p class="hint">You stay signed in on this device for 90 days.</p>
+  </form>
+  <script>
+    document.getElementById("login").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = e.target.querySelector("button"), err = document.getElementById("error");
+      btn.disabled = true; err.textContent = "";
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Command-Center": "1" },
+          body: JSON.stringify({ password: document.getElementById("password").value }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "Couldn't sign in");
+        location.replace("/");
+      } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
+    });
+  </script>
+</body>
+</html>
