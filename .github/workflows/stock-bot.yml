@@ -60,6 +60,7 @@ jobs:
           TRADING212_API_SECRET: ${{ secrets.TRADING212_API_SECRET }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
+          BARGO_API_KEY: ${{ secrets.BARGO_API_KEY }}
           OPENFIGI_API_KEY: ${{ secrets.OPENFIGI_API_KEY }}
           GH_TOKEN: ${{ github.token }}
         run: |

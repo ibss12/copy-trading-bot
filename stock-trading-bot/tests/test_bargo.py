@@ -13,7 +13,7 @@ from unittest import mock
 
 import requests
 
-from signals.bargo import BARGO_SOURCE, PAGE_SIZE, bargo_congress_signals
+from signals.bargo import BARGO_SOURCE, KEYED_PAGE_SIZE, PAGE_SIZE, bargo_congress_signals
 
 
 def trade(ticker: str, kind: str, disclosed: str, member: str = "Nancy Pelosi") -> dict:
@@ -99,6 +99,12 @@ class BargoTest(unittest.TestCase):
             signals = bargo_congress_signals(self.cache, ["Nancy Pelosi"], date(2026, 8, 1))
         self.assertEqual(get.call_count, 1)
         self.assertEqual([s.symbol for s in signals], ["INTC"])
+
+    def test_free_key_sent_with_bigger_pages(self):
+        with mock.patch("signals.http.requests.get", side_effect=[FakeResponse([])]) as get:
+            bargo_congress_signals(self.cache, ["Nancy Pelosi"], date(2026, 8, 1), api_key="k123")
+        self.assertEqual(get.call_args.kwargs["headers"]["X-Api-Key"], "k123")
+        self.assertIn(f"limit={KEYED_PAGE_SIZE}", get.call_args.args[0])
 
     def test_cached_between_runs(self):
         self.fetch([[trade("INTC", "purchase", "2026-08-21")]])

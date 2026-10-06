@@ -98,7 +98,9 @@ def load_signal_feed(watchlist: list[str], since: date) -> SignalFeed:
         else:
             signals += _collect(
                 "Congress",
-                lambda: bargo_congress_signals(config.CACHE_DIR, config.FOLLOW_POLITICIANS, since),
+                lambda: bargo_congress_signals(
+                    config.CACHE_DIR, config.FOLLOW_POLITICIANS, since, config.BARGO_API_KEY
+                ),
             )
 
     return SignalFeed(signals)

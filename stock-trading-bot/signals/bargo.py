@@ -1,7 +1,8 @@
 """Congressional stock trades (STOCK Act disclosures) via Bargo's free API. No key needed.
 
 https://www.bargo.ai/free-apis/congress - last 3 months of House and Senate filings,
-about 30 requests and 100 rows per day per IP without a key.
+about 30 requests and 100 rows per day per IP without a key; a free key
+(https://www.bargo.ai/free-apis/dash) raises that to 100 requests and 1,000 rows.
 """
 
 import logging
@@ -18,6 +19,7 @@ BARGO_URL = "https://www.bargo.ai/free-apis/congress/v1/trades"
 BARGO_SOURCE = "Congress (STOCK Act, via bargo.ai)"
 CONGRESS_TTL_S = 12 * 3600
 PAGE_SIZE = 25
+KEYED_PAGE_SIZE = 100
 MAX_PAGES = 20
 STOCK_ACT_LAG = timedelta(days=45)
 
@@ -62,21 +64,23 @@ def _signal(row: dict, politician: str, since: date) -> TraderSignal | None:
     )
 
 
-def bargo_congress_signals(cache_dir: Path, politicians: list[str], since: date) -> list[TraderSignal]:
-    http = CachedHttp(
-        cache_dir / "bargo",
-        headers={"Accept": "application/json", "User-Agent": "stock-trading-bot"},
-        min_interval_s=1.0,
-    )
+def bargo_congress_signals(
+    cache_dir: Path, politicians: list[str], since: date, api_key: str = ""
+) -> list[TraderSignal]:
+    headers = {"Accept": "application/json", "User-Agent": "stock-trading-bot"}
+    if api_key:
+        headers["X-Api-Key"] = api_key
+    http = CachedHttp(cache_dir / "bargo", headers=headers, min_interval_s=1.0)
+    page_size = KEYED_PAGE_SIZE if api_key else PAGE_SIZE
     window_start = _window_start(since).isoformat()
     signals = []
     for politician in politicians:
         for page in range(MAX_PAGES):
-            query = urlencode({"member": politician, "from": window_start, "limit": PAGE_SIZE, "page": page})
+            query = urlencode({"member": politician, "from": window_start, "limit": page_size, "page": page})
             rows = http.get_json(f"{BARGO_URL}?{query}", ttl_s=CONGRESS_TTL_S, stale_on_error=True).get("trades") or []
             page_signals = [s for s in (_signal(row, politician, since) for row in rows) if s]
             signals += page_signals
-            if len(rows) < PAGE_SIZE or not page_signals:
+            if len(rows) < page_size or not page_signals:
                 break
         else:
             logger.warning(
