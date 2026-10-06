@@ -37,7 +37,8 @@ class CachedHttp:
     def get_text(self, url: str, ttl_s: float | None = None, stale_on_error: bool = False) -> str:
         """GET `url`. `ttl_s=None` caches forever (use for immutable documents).
 
-        `stale_on_error` returns an expired cached copy, if any, when the request fails.
+        `stale_on_error` returns an expired cached copy, if any, when the request fails,
+        and keeps using it for another `ttl_s` before retrying.
         """
         cached = self._read_cache(url, ttl_s)
         if cached is not None:
@@ -50,6 +51,7 @@ class CachedHttp:
             stale = self._read_cache(url, None) if stale_on_error else None
             if stale is None:
                 raise
+            self._cache_path(url).touch()
             return stale
         self._cache_path(url).write_text(response.text)
         return response.text

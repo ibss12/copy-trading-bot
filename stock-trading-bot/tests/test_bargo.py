@@ -4,6 +4,7 @@ Run: python -m unittest tests.test_bargo -v
 """
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import date
@@ -72,6 +73,32 @@ class BargoTest(unittest.TestCase):
         signals, get = self.fetch([full, [trade("AAPL", "sale", "2026-08-25")]])
         self.assertEqual(get.call_count, 2)
         self.assertEqual(len(signals), PAGE_SIZE + 1)
+
+    def test_reads_every_full_page(self):
+        full = [trade("INTC", "purchase", "2026-08-21")] * PAGE_SIZE
+        signals, get = self.fetch([full] * 4 + [[]])
+        self.assertEqual(get.call_count, 5)
+        self.assertEqual(len(signals), 4 * PAGE_SIZE)
+
+    def test_stops_at_page_older_than_lookback(self):
+        old = [trade("NVDA", "purchase", "2026-07-01")] * PAGE_SIZE
+        signals, get = self.fetch([old, [trade("AAPL", "sale", "2026-08-25")]])
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(signals, [])
+
+    def test_asks_only_for_recent_window(self):
+        _, get = self.fetch([[]], since=date(2026, 8, 20))
+        self.assertIn("from=2026-07-06", get.call_args.args[0])
+
+    def test_waits_before_retrying_after_rate_limit(self):
+        self.fetch([[trade("INTC", "purchase", "2026-08-21")]])
+        for path in (self.cache / "bargo").iterdir():
+            os.utime(path, (0, 0))
+        with mock.patch("signals.http.requests.get", side_effect=requests.HTTPError("429 Too Many Requests")) as get:
+            bargo_congress_signals(self.cache, ["Nancy Pelosi"], date(2026, 8, 1))
+            signals = bargo_congress_signals(self.cache, ["Nancy Pelosi"], date(2026, 8, 1))
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual([s.symbol for s in signals], ["INTC"])
 
     def test_cached_between_runs(self):
         self.fetch([[trade("INTC", "purchase", "2026-08-21")]])
