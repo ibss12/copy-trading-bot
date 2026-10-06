@@ -3,6 +3,7 @@
 from datetime import date, timedelta
 
 from signals import SignalFeed, load_signal_feed
+from strategies.rules import smart_money_decision
 from strategies.sma_crossover import SmaCrossover, SmaSignal
 
 
@@ -50,18 +51,15 @@ class SmartMoneySma(SmaCrossover):
         return list(dict.fromkeys(symbols))
 
     def decide(self, symbol: str, signal: SmaSignal) -> None:
-        score = self.scores.get(symbol, 0)
-        if self.held_quantity(symbol) > 0:
-            if signal.crossed_down:
-                self.sell(symbol, "SMA bearish crossover")
-            elif score < 0:
-                self.sell(symbol, f"followed traders selling: {self._who(symbol, 'sell')}")
-            return
-
-        if score > 0 and (signal.trend_up or not self.parameters["require_sma_confirmation"]):
-            self.buy(symbol, signal.price, f"followed traders buying: {self._who(symbol, 'buy')}")
-        elif signal.crossed_up and symbol in self.symbols and score >= 0:
-            self.buy(symbol, signal.price, "SMA bullish crossover")
+        decision = smart_money_decision(
+            signal,
+            held=self.held_quantity(symbol) > 0,
+            on_watchlist=symbol in self.symbols,
+            score=self.scores.get(symbol, 0),
+            require_sma_confirmation=bool(self.parameters["require_sma_confirmation"]),
+            who=lambda action: self._who(symbol, action),
+        )
+        self.act(symbol, signal, decision)
 
     def _load_feed(self, since: date) -> None:
         self.log_message(f"Loading smart-money disclosures since {since}...")

@@ -85,6 +85,9 @@ BROKER = _str("BROKER", "alpaca").lower()
 
 # --- Command center access ----------------------------------------------------
 # Password for the command center. Required whenever it can be reached from another device.
+# Scheduled mode (run_scheduled.py): bot messages go to this Discord channel webhook.
+DISCORD_WEBHOOK_URL = _str("DISCORD_WEBHOOK_URL")
+
 DASHBOARD_PASSWORD = _str("DASHBOARD_PASSWORD")
 # Public https address when hosted (e.g. https://1-2-3-4.sslip.io). Used as the push contact.
 PUBLIC_URL = _str("PUBLIC_URL").rstrip("/")

@@ -13,6 +13,7 @@ import requests
 
 DEMO_HOST = "demo.trading212.com"
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
+ACTIVE_STATUSES = {"LOCAL", "UNCONFIRMED", "CONFIRMED", "NEW", "CANCELLING", "PARTIALLY_FILLED", "REPLACING"}
 
 # Minimum seconds between calls per endpoint (Trading 212 publishes these limits per account).
 RATE_LIMITS = {
@@ -118,6 +119,25 @@ class Trading212Client:
         if ticker:
             params["ticker"] = ticker
         return self._get("history", "/equity/history/orders", params).get("items", [])
+
+    def final_order_state(self, ticker: str, order_id) -> tuple[str, float, float] | None:
+        """(status, filled quantity, average price) from order history, or None if not finished/reported yet."""
+        matches = [item for item in self.history_orders(ticker=ticker) if str(item["order"]["id"]) == str(order_id)]
+        if not matches:
+            return None
+        row = matches[0]["order"]
+        status = str(row.get("status", "")).upper()
+        if status in ACTIVE_STATUSES:
+            return None
+        fills = [m.get("fill") for m in matches if m.get("fill")]
+        filled = abs(float(row.get("filledQuantity") or sum(abs(float(f["quantity"])) for f in fills) or 0))
+        if fills:
+            price = sum(float(f["price"]) * abs(float(f["quantity"])) for f in fills) / max(
+                sum(abs(float(f["quantity"])) for f in fills), 1e-9
+            )
+        else:
+            price = abs(float(row.get("filledValue") or 0)) / filled if filled else 0.0
+        return status, filled, price
 
     # ------------------------------------------------------------------ trading
     def market_order(self, ticker: str, quantity: float) -> dict:

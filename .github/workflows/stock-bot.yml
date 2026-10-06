@@ -1,0 +1,74 @@
+# Free always-on stock bot: every 30 minutes on US market days GitHub runs one bot check,
+# which trades the Trading 212 PRACTICE account and sends Discord messages.
+# Setup: stock-trading-bot/README.md, section "Free: GitHub + Discord".
+name: Stock bot (practice + Discord)
+
+on:
+  schedule:
+    # UTC times covering 9:30am-4pm New York in both summer and winter time; the bot itself
+    # checks the real NYSE calendar. Odd minutes avoid GitHub's busy top of the hour.
+    - cron: "7,37 13-21 * * 1-5"
+  workflow_dispatch:
+
+# One check at a time, so two runs can never place the same order.
+concurrency:
+  group: stock-bot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: stock-trading-bot
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: stock-trading-bot/requirements.txt
+
+      - name: Install
+        run: |
+          uv venv --python 3.11 .venv
+          uv pip install --python .venv/bin/python -r requirements.txt
+
+      # The bot's memory: its open orders, which shares are the bot's, alerts already sent.
+      - name: Restore bot memory
+        uses: actions/cache/restore@v4
+        with:
+          path: stock-trading-bot/.cache
+          key: stockbot-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: stockbot-state-
+
+      # Repository "Variables" (Settings -> Secrets and variables -> Actions -> Variables), e.g.
+      # WATCHLIST or MAX_POSITION_PCT, become bot settings. Empty ones are ignored.
+      - name: Settings from repository variables
+        env:
+          REPO_VARS: ${{ toJSON(vars) }}
+        run: echo "$REPO_VARS" | jq -r 'to_entries[] | select(.value != "") | "\(.key)=\(.value | @json)"' > .env
+
+      - name: Run one bot check
+        env:
+          TRADING212_API_KEY: ${{ secrets.TRADING212_API_KEY }}
+          TRADING212_API_SECRET: ${{ secrets.TRADING212_API_SECRET }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
+          OPENFIGI_API_KEY: ${{ secrets.OPENFIGI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export STOCKBOT_REPO_PUSHED_AT="$(gh api "repos/${{ github.repository }}" --jq .pushed_at || true)"
+          .venv/bin/python run_scheduled.py
+
+      - name: Save bot memory
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: stock-trading-bot/.cache
+          key: stockbot-state-${{ github.run_id }}-${{ github.run_attempt }}

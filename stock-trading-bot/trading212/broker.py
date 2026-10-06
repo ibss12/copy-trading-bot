@@ -26,7 +26,6 @@ from .yahoo_live import YahooLiveData
 logger = logging.getLogger(__name__)
 
 UNCERTAIN_TIMEOUT_S = 600
-T212_ACTIVE = {"LOCAL", "UNCONFIRMED", "CONFIRMED", "NEW", "CANCELLING", "PARTIALLY_FILLED", "REPLACING"}
 
 
 def order_side(row: dict) -> str:
@@ -220,24 +219,7 @@ class Trading212Broker(Broker):
     def _final_state(self, order: Order) -> tuple[str, float, float] | None:
         """(status, filled quantity, average price) from order history, or None if not reported yet."""
         ticker = self._tickers.get(order.asset.symbol) or self._ticker(order.asset.symbol)
-        matches = [
-            item for item in self.client.history_orders(ticker=ticker) if str(item["order"]["id"]) == order.identifier
-        ]
-        if not matches:
-            return None
-        row = matches[0]["order"]
-        status = str(row.get("status", "")).upper()
-        if status in T212_ACTIVE:
-            return None
-        fills = [m.get("fill") for m in matches if m.get("fill")]
-        filled = abs(float(row.get("filledQuantity") or sum(abs(float(f["quantity"])) for f in fills) or 0))
-        if fills:
-            price = sum(float(f["price"]) * abs(float(f["quantity"])) for f in fills) / max(
-                sum(abs(float(f["quantity"])) for f in fills), 1e-9
-            )
-        else:
-            price = abs(float(row.get("filledValue") or 0)) / filled if filled else 0.0
-        return status, filled, price
+        return self.client.final_order_state(ticker, order.identifier)
 
     def _resolve_uncertain(self, pending: list[dict]) -> None:
         for order in self.get_tracked_orders():

@@ -1,25 +1,14 @@
 """Short/long simple-moving-average crossover on daily bars, with risk controls."""
 
 import math
-from dataclasses import dataclass
 from datetime import date
 
 from lumibot.entities import Order
 from lumibot.strategies.strategy import Strategy
 
+from strategies.rules import Decision, SmaSignal, sma_decision
 
-@dataclass(frozen=True)
-class SmaSignal:
-    price: float
-    previous_close: float
-    short_sma: float
-    long_sma: float
-    crossed_up: bool
-    crossed_down: bool
-
-    @property
-    def trend_up(self) -> bool:
-        return self.short_sma > self.long_sma
+__all__ = ["SmaCrossover", "SmaSignal"]
 
 
 class SmaCrossover(Strategy):
@@ -89,13 +78,15 @@ class SmaCrossover(Strategy):
         return list(dict.fromkeys(self.symbols + held))
 
     def decide(self, symbol: str, signal: SmaSignal) -> None:
-        if self.held_quantity(symbol) > 0:
-            if signal.crossed_down:
-                self.sell(symbol, f"short SMA {signal.short_sma:.2f} crossed below long SMA {signal.long_sma:.2f}")
-        elif signal.crossed_up and symbol in self.symbols:
-            self.buy(
-                symbol, signal.price, f"short SMA {signal.short_sma:.2f} crossed above long SMA {signal.long_sma:.2f}"
-            )
+        self.act(symbol, signal, sma_decision(signal, self.held_quantity(symbol) > 0, symbol in self.symbols))
+
+    def act(self, symbol: str, signal: SmaSignal, decision: Decision | None) -> None:
+        if decision is None:
+            return
+        if decision.action == "buy":
+            self.buy(symbol, signal.price, decision.reason)
+        else:
+            self.sell(symbol, decision.reason)
 
     # --- Helpers ---------------------------------------------------------------
 
@@ -107,17 +98,8 @@ class SmaCrossover(Strategy):
             return None
         if bars is None or len(bars.df) < self.long_window + 1:
             return None
-        closes = bars.df["close"].astype(float)
-        short = closes.rolling(self.short_window).mean()
-        long = closes.rolling(self.long_window).mean()
-        return SmaSignal(
-            price=float(closes.iloc[-1]),
-            previous_close=float(closes.iloc[-2]),
-            short_sma=float(short.iloc[-1]),
-            long_sma=float(long.iloc[-1]),
-            crossed_up=short.iloc[-2] <= long.iloc[-2] and short.iloc[-1] > long.iloc[-1],
-            crossed_down=short.iloc[-2] >= long.iloc[-2] and short.iloc[-1] < long.iloc[-1],
-        )
+        closes = bars.df["close"].astype(float).tolist()
+        return SmaSignal.from_closes(closes, self.short_window, self.long_window)
 
     def held_quantity(self, symbol: str) -> float:
         position = self.get_position(symbol)
