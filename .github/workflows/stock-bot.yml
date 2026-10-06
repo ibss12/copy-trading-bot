@@ -1,4 +1,4 @@
-# Free always-on stock bot: every 30 minutes on US market days GitHub runs one bot check,
+# Free always-on stock bot: every 15 minutes on US market days GitHub runs one bot check,
 # which trades the Trading 212 PRACTICE account and sends Discord messages.
 # Setup: stock-trading-bot/README.md, section "Free: GitHub + Discord".
 name: Stock bot (practice + Discord)
@@ -7,7 +7,7 @@ on:
   schedule:
     # UTC times covering 9:30am-4pm New York in both summer and winter time; the bot itself
     # checks the real NYSE calendar. Odd minutes avoid GitHub's busy top of the hour.
-    - cron: "7,37 13-21 * * 1-5"
+    - cron: "7,22,37,52 13-21 * * 1-5"
   workflow_dispatch:
 
 # One check at a time, so two runs can never place the same order.
