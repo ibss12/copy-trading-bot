@@ -26,6 +26,8 @@ This directory is standalone and does not use any of the Solana/crypto code in t
 | `show_signals.py` | Just print what the people you follow recently bought/sold (no trading) |
 | `run_dashboard.py` / `dashboard/` | Browser **command center**: live prices, charts, alerts + pop-ups, paper account, bot controls |
 | `deploy/oracle/install.sh` | One-command install on an Ubuntu cloud server (Oracle Always Free): systemd + Caddy HTTPS |
+| `run_scheduled.py` / `scheduled/` / `notify/` | One bot check that trades the practice account and sends Discord messages, then exits (free GitHub schedule, section 8) |
+| `../.github/workflows/stock-bot.yml` | Runs `run_scheduled.py` on GitHub every 30 minutes on US market days |
 
 ## 1. Setup
 
@@ -313,6 +315,70 @@ What the script sets up, and how to look after it:
   on the server answers.
 - Oracle may reclaim Always Free servers that sit almost completely idle for a week; upgrading the
   account to *Pay As You Go* (still free for these resources) avoids that.
+
+## 8. Free: GitHub + Discord (no server, no app)
+
+GitHub runs the bot for you, for free (public repo), about every 30 minutes while the US market is
+open. Each run checks your stocks, trades your Trading 212 **practice** account with the same rules
+and limits as above, and sends what happened to a **Discord** channel, so your phones get notified
+with everything closed. There's no live dashboard in this mode; you can still trade yourself in the
+Trading 212 app and the bot only sells shares it bought.
+
+You get messages for: bot buys and sells (with the reason), fills, cancelled or refused orders,
+stocks turning BUY or SELL, new big-trader filings, big daily price moves (`PRICE_ALERT_PCTS`), the
+daily loss limit, problems such as a wrong key (once a day), and a summary after the close.
+
+**1. Make a Discord channel link (webhook).** In the Discord app (a computer or phone browser is
+easiest): create a server for yourself (**+** &rarr; *Create My Own*) or use one you own. Next to a
+text channel tap the gear (*Edit Channel*) &rarr; **Integrations** &rarr; **Webhooks** &rarr;
+**New Webhook** &rarr; **Copy Webhook URL**. Keep this link private: anyone who has it can post in
+the channel.
+
+**2. Get your Trading 212 practice key** (Trading 212 app &rarr; switch to **Practice** &rarr;
+Settings &rarr; API (Beta) &rarr; generate a key; copy the key and the secret). You can skip this at
+first: without it the bot doesn't trade but still sends advice and big-trader alerts.
+
+**3. Put them in GitHub's hidden settings.** Open
+https://github.com/ibss12/copy-trading-bot/settings/secrets/actions &rarr; **New repository secret**,
+once for each:
+
+| Name | Value |
+| --- | --- |
+| `DISCORD_WEBHOOK_URL` | the webhook link from step 1 |
+| `TRADING212_API_KEY` | your practice API key |
+| `TRADING212_API_SECRET` | your practice API secret |
+| `QUIVER_API_KEY` (optional) | for Pelosi/Congress trades |
+
+Secrets are hidden, even though the repo is public. To change settings such as `WATCHLIST`,
+`MAX_POSITION_PCT` or `STRATEGY`, use the **Variables** tab on the same page (same names as in
+`.env.example`).
+
+**4. Start it.** Open https://github.com/ibss12/copy-trading-bot/actions &rarr; if asked, click
+*I understand my workflows, go ahead and enable them* &rarr; **Stock bot (practice + Discord)** &rarr;
+**Run workflow**. Within a few minutes Discord should show "Stock bot is connected". After that it
+runs by itself; you don't need to keep anything open.
+
+Good to know:
+- **Timing:** runs are scheduled at :07 and :37 past each hour on weekdays. GitHub can start them a few
+  minutes late on busy days, and the bot checks the real NYSE calendar, so weekends and holidays are
+  skipped.
+- **Stopping it:** Actions &rarr; *Stock bot (practice + Discord)* &rarr; **&middot;&middot;&middot;**
+  &rarr; **Disable workflow** (turn it back on the same way). Deleting the Trading 212 secrets keeps
+  the messages but stops all trading.
+- **60-day rule:** GitHub pauses schedules in public repos after 60 days without any change to the repo.
+  The daily summary warns you from day 50; any small edit (for example to this README) resets it.
+- **The bot's memory** (its open orders and which shares it bought) is kept in GitHub's Actions cache
+  between runs. GitHub deletes cache entries that aren't used for 7 days, so if the workflow is off for
+  over a week the bot forgets which shares were its own; it then treats them as yours and never sells
+  them.
+- **Use one mode per practice account:** don't run this and the Oracle command center bot on the same
+  account at the same time; each keeps its own record of the bot's shares.
+- The daily loss limit is checked on every run (not only near the close), and once hit, no more buys
+  that day.
+- Workflow logs of a public repo can be seen by anyone; they show what the bot did but never your keys
+  or balances.
+- To try it on your own computer instead: put the same values in `.env` and run
+  `python run_scheduled.py` (without `DISCORD_WEBHOOK_URL` it just prints the messages).
 
 ## Disclaimer
 
