@@ -85,7 +85,7 @@ not non-public insider information; it tells you what they already did, after th
 | Hedge funds / big investors (Buffett, Aschenbrenner, Ackman) | SEC 13F quarterly holdings (free) | up to ~45 days after quarter end | `FOLLOW_FUNDS` |
 | Named insiders (Donald J. Trump, Donald Trump Jr.) | SEC Form 4 (free) | 2 business days | `FOLLOW_INSIDERS` |
 | CEOs of stocks on your watchlist buying/selling their own shares | SEC Form 4 (free) | 2 business days | `TRACK_CEO_TRADES`, `CEO_TITLES` |
-| Nancy Pelosi and other members of Congress | STOCK Act disclosures via [Bargo](https://www.bargo.ai/free-apis/congress) (free, no key, last 3 months), or [Quiver Quantitative](https://www.quiverquant.com/) if `QUIVER_API_KEY` is set (paid) | up to 45 days | `FOLLOW_POLITICIANS`, `QUIVER_API_KEY` |
+| Nancy Pelosi and other members of Congress | STOCK Act disclosures via [Bargo](https://www.bargo.ai/free-apis/congress) (free, last 3 months; no key needed, or a free `BARGO_API_KEY` for 10x the daily limit when following several politicians), or [Quiver Quantitative](https://www.quiverquant.com/) if `QUIVER_API_KEY` is set (paid) | up to 45 days | `FOLLOW_POLITICIANS`, `BARGO_API_KEY`, `QUIVER_API_KEY` |
 
 How it trades:
 
@@ -347,6 +347,7 @@ once for each:
 | `DISCORD_WEBHOOK_URL` | the webhook link from step 1 |
 | `TRADING212_API_KEY` | your practice API key |
 | `TRADING212_API_SECRET` | your practice API secret |
+| `BARGO_API_KEY` (optional) | free key from https://www.bargo.ai/free-apis/dash; lets the bot follow more politicians per day |
 | `QUIVER_API_KEY` (optional) | paid Quiver key; without it Congress trades come free from Bargo |
 
 Secrets are hidden, even though the repo is public. To change settings such as `WATCHLIST`,
