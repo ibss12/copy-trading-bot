@@ -27,7 +27,7 @@ This directory is standalone and does not use any of the Solana/crypto code in t
 | `run_dashboard.py` / `dashboard/` | Browser **command center**: live prices, charts, alerts + pop-ups, paper account, bot controls |
 | `deploy/oracle/install.sh` | One-command install on an Ubuntu cloud server (Oracle Always Free): systemd + Caddy HTTPS |
 | `run_scheduled.py` / `scheduled/` / `notify/` | One bot check that trades the practice account and sends Discord messages, then exits (free GitHub schedule, section 8) |
-| `../.github/workflows/stock-bot.yml` | Runs `run_scheduled.py` on GitHub every 30 minutes on US market days |
+| `../.github/workflows/stock-bot.yml` | Runs `run_scheduled.py` on GitHub every 15 minutes on US market days |
 
 ## 1. Setup
 
@@ -318,7 +318,7 @@ What the script sets up, and how to look after it:
 
 ## 8. Free: GitHub + Discord (no server, no app)
 
-GitHub runs the bot for you, for free (public repo), about every 30 minutes while the US market is
+GitHub runs the bot for you, for free (public repo), about every 15 minutes while the US market is
 open. Each run checks your stocks, trades your Trading 212 **practice** account with the same rules
 and limits as above, and sends what happened to a **Discord** channel, so your phones get notified
 with everything closed. There's no live dashboard in this mode; you can still trade yourself in the

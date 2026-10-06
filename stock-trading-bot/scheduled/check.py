@@ -159,7 +159,7 @@ class ScheduledCheck:
         )
 
     def _error_once(self, title: str, body: str = "") -> None:
-        """Same problem is only sent once a day, so a broken key doesn't ping you every 30 minutes."""
+        """Same problem is only sent once a day, so a broken key doesn't ping you every 15 minutes."""
         logger.warning("%s %s", title, body)
         if self.state["errors"].get(title) != self.today.isoformat():
             self.state["errors"][title] = self.today.isoformat()
@@ -238,7 +238,7 @@ class ScheduledCheck:
                 "You'll still get buy/sell advice and big-trader alerts."
             )
         lines.append(
-            "Checks run about every 30 minutes while the US market is open (9:30am-4pm New York time), "
+            "Checks run about every 15 minutes while the US market is open (9:30am-4pm New York time), "
             "plus a summary after the close."
         )
         self.notifier.add("info", "Stock bot is connected", "\n".join(lines))
