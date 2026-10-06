@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 
 import config
+from signals.bargo import bargo_congress_signals
 from signals.models import TraderSignal
 from signals.quiver import congress_signals
 from signals.sec_edgar import SecEdgarClient
@@ -95,7 +96,10 @@ def load_signal_feed(watchlist: list[str], since: date) -> SignalFeed:
                 lambda: congress_signals(config.CACHE_DIR, config.QUIVER_API_KEY, config.FOLLOW_POLITICIANS, since),
             )
         else:
-            logger.warning("QUIVER_API_KEY not set - skipping congressional trades for %s", config.FOLLOW_POLITICIANS)
+            signals += _collect(
+                "Congress",
+                lambda: bargo_congress_signals(config.CACHE_DIR, config.FOLLOW_POLITICIANS, since),
+            )
 
     return SignalFeed(signals)
 

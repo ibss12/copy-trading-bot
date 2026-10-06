@@ -34,19 +34,28 @@ class CachedHttp:
             time.sleep(wait)
         self._last_request = time.monotonic()
 
-    def get_text(self, url: str, ttl_s: float | None = None) -> str:
-        """GET `url`. `ttl_s=None` caches forever (use for immutable documents)."""
+    def get_text(self, url: str, ttl_s: float | None = None, stale_on_error: bool = False) -> str:
+        """GET `url`. `ttl_s=None` caches forever (use for immutable documents).
+
+        `stale_on_error` returns an expired cached copy, if any, when the request fails.
+        """
         cached = self._read_cache(url, ttl_s)
         if cached is not None:
             return cached
         self._throttle()
-        response = requests.get(url, headers=self.headers, timeout=self.timeout_s)
-        response.raise_for_status()
+        try:
+            response = requests.get(url, headers=self.headers, timeout=self.timeout_s)
+            response.raise_for_status()
+        except requests.RequestException:
+            stale = self._read_cache(url, None) if stale_on_error else None
+            if stale is None:
+                raise
+            return stale
         self._cache_path(url).write_text(response.text)
         return response.text
 
-    def get_json(self, url: str, ttl_s: float | None = None):
-        return json.loads(self.get_text(url, ttl_s))
+    def get_json(self, url: str, ttl_s: float | None = None, stale_on_error: bool = False):
+        return json.loads(self.get_text(url, ttl_s, stale_on_error))
 
     def post_json(self, url: str, payload) -> object:
         self._throttle()

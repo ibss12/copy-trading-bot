@@ -241,9 +241,7 @@ class Hub:
                 "auth": self.auth.enabled,
                 "push_key": self.push.public_key,
                 "self_update": config.SELF_UPDATE,
-                "quiver_enabled": bool(config.QUIVER_API_KEY),
-                "follows": [f.label for f in config.FOLLOW_FUNDS + config.FOLLOW_INSIDERS]
-                + (config.FOLLOW_POLITICIANS if config.QUIVER_API_KEY else []),
+                "follows": [f.label for f in config.FOLLOW_FUNDS + config.FOLLOW_INSIDERS] + config.FOLLOW_POLITICIANS,
             },
         }
 
