@@ -18,7 +18,7 @@ This directory is standalone and does not use any of the Solana/crypto code in t
 | `config.py` / `.env` | API keys, watchlist, position sizing, risk limits, who to follow |
 | `strategies/sma_crossover.py` | `SmaCrossover` Lumibot strategy + risk controls |
 | `strategies/smart_money.py` | `SmartMoneySma`: SMA crossover + "follow the big traders" signals |
-| `signals/` | Public-disclosure data: SEC 13F, SEC Form 4, Quiver congressional trades |
+| `signals/` | Public-disclosure data: SEC 13F, SEC Form 4, congressional trades (Bargo, or Quiver) |
 | `run_backtest.py` | Backtest on Yahoo Finance history and print performance stats |
 | `run_live.py` | Run live on your Alpaca **paper** or Trading 212 **practice** account |
 | `trading212/` | Trading 212 practice API client, Lumibot broker, and the ledger of shares the bot bought |
@@ -85,7 +85,7 @@ not non-public insider information; it tells you what they already did, after th
 | Hedge funds / big investors (Buffett, Aschenbrenner, Ackman) | SEC 13F quarterly holdings (free) | up to ~45 days after quarter end | `FOLLOW_FUNDS` |
 | Named insiders (Donald J. Trump, Donald Trump Jr.) | SEC Form 4 (free) | 2 business days | `FOLLOW_INSIDERS` |
 | CEOs of stocks on your watchlist buying/selling their own shares | SEC Form 4 (free) | 2 business days | `TRACK_CEO_TRADES`, `CEO_TITLES` |
-| Nancy Pelosi and other members of Congress | STOCK Act disclosures via [Quiver Quantitative](https://www.quiverquant.com/) (API key required) | up to 45 days | `QUIVER_API_KEY`, `FOLLOW_POLITICIANS` |
+| Nancy Pelosi and other members of Congress | STOCK Act disclosures via [Bargo](https://www.bargo.ai/free-apis/congress) (free, no key, last 3 months), or [Quiver Quantitative](https://www.quiverquant.com/) if `QUIVER_API_KEY` is set (paid) | up to 45 days | `FOLLOW_POLITICIANS`, `QUIVER_API_KEY` |
 
 How it trades:
 
@@ -190,7 +190,7 @@ section 7 to run it on an always-on cloud server and open it from your phones.
   - daily moves past your levels (default 3/5/10%) and sudden moves (default 1.5% in 5 minutes)
   - your own price alerts ("tell me when NVDA is below $200")
   - buy/sell signals (20/50-day average crossovers)
-  - new filings from the big traders you follow (13F, Form 4, Congress with a Quiver key)
+  - new filings from the big traders you follow (13F, Form 4, Congress)
   - **buy/sell calls:** each watchlist stock gets a BUY / SELL / HOLD / WATCH badge with the reasons
     (trend, recent crossover, which big traders bought or sold). You get a pop-up when a stock turns
     BUY or SELL, plus a "Today's calls" summary when the dashboard starts
@@ -347,7 +347,7 @@ once for each:
 | `DISCORD_WEBHOOK_URL` | the webhook link from step 1 |
 | `TRADING212_API_KEY` | your practice API key |
 | `TRADING212_API_SECRET` | your practice API secret |
-| `QUIVER_API_KEY` (optional) | for Pelosi/Congress trades |
+| `QUIVER_API_KEY` (optional) | paid Quiver key; without it Congress trades come free from Bargo |
 
 Secrets are hidden, even though the repo is public. To change settings such as `WATCHLIST`,
 `MAX_POSITION_PCT` or `STRATEGY`, use the **Variables** tab on the same page (same names as in

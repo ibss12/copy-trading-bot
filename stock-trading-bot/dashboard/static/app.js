@@ -711,8 +711,7 @@ function onAlert(a) {
 // ---------- big traders ----------
 function renderSignals() {
   const sig = S.signals;
-  $("#follows").innerHTML = (S.config.follows || []).map((f) => `<span class="badge neutral">${esc(f)}</span>`).join("")
-    + (S.config.quiver_enabled ? "" : ` <span class="badge neutral" title="Add QUIVER_API_KEY to .env to follow Nancy Pelosi and other members of Congress">+ Congress (needs Quiver key)</span>`);
+  $("#follows").innerHTML = (S.config.follows || []).map((f) => `<span class="badge neutral">${esc(f)}</span>`).join("");
   const scores = Object.entries(sig.scores || {}).filter(([, v]) => v).sort((a, b) => b[1] - a[1]);
   $("#scores").innerHTML = scores.length ? `<span class="muted small" style="align-self:center">Net buys − sells, last ${sig.lookback_days || 45} days:</span>` + scores.map(([sym, v]) => `<span class="score-chip" data-sym="${esc(sym)}"><b>${esc(sym)}</b><span class="${cls(v)}">${v > 0 ? "+" : ""}${v}</span></span>`).join("") : "";
   const list = sig.signals || [];
