@@ -718,9 +718,9 @@ function renderSignals() {
   if (sig.loading && !list.length) { $("#signals-list").innerHTML = `<div class="empty">Checking SEC filings for new moves…</div>`; return; }
   if (sig.error) { $("#signals-list").innerHTML = `<div class="empty">Couldn't load filings: ${esc(sig.error)}</div>`; return; }
   $("#signals-list").innerHTML = list.length ? list.map((s) => `
-    <div class="signal" data-sym="${esc(s.symbol)}" title="${esc(s.detail)}">
+    <div class="signal" data-sym="${esc(s.symbol)}" title="${esc(s.reason || s.detail)}">
       <span class="act ${s.action}">${s.action.toUpperCase()}</span>
-      <div style="min-width:0"><div class="who">${esc(s.trader)} · ${esc(s.symbol)}</div><div class="what">${esc(s.detail)}</div></div>
+      <div style="min-width:0"><div class="who">${esc(s.trader)} · ${esc(s.symbol)}</div><div class="what">${esc(s.detail)}${s.notify_only ? " · info only" : ""}</div></div>
       <div class="when">${dayAgo(s.disclosed_on)}<br>${esc(s.source)}</div></div>`).join("")
     : `<div class="empty">No new filings from the people you follow in the last ${sig.display_days || 180} days.</div>`;
 }

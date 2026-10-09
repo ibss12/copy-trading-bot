@@ -120,8 +120,13 @@ FOLLOW_FUNDS = _filers(
 FOLLOW_INSIDERS = _filers("FOLLOW_INSIDERS", "Donald J. Trump:947033,Donald Trump Jr.:2016181")
 TRACK_CEO_TRADES = _bool("TRACK_CEO_TRADES", True)
 CEO_TITLES = _list("CEO_TITLES", "CEO,Chief Executive")
-# Also announce trades by other officers/directors of watchlist companies (never traded on).
+# Also announce trades by other top executives of watchlist companies (never traded on).
 NOTIFY_OTHER_INSIDERS = _bool("NOTIFY_OTHER_INSIDERS", True)
+INSIDER_ALERT_TITLES = _list(
+    "INSIDER_ALERT_TITLES",
+    "CEO,Chief Executive,CFO,Chief Financial,COO,Chief Operating,President,Chair,Chairman,Chairwoman,Chairperson",
+)
+INSIDER_ALERT_MIN_SELL_USD = _float("INSIDER_ALERT_MIN_SELL_USD", 500_000)
 IGNORE_PLANNED_SALES = _bool("IGNORE_PLANNED_SALES", True)
 
 QUIVER_API_KEY = _str("QUIVER_API_KEY")

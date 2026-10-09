@@ -271,7 +271,8 @@ class ScheduledCheck:
                 f"{signal.trader} {verb} {signal.symbol}",
                 f"{signal.detail} ({signal.source}, disclosed {signal.disclosed_on}). "
                 "Public filings come out days to months after the trade."
-                + (" For your info only: the bot doesn't trade on this one." if signal.notify_only else ""),
+                + (f"\nWhy: {signal.reason}" if signal.reason else "")
+                + ("\nFor your info only: the bot doesn't trade on this one." if signal.notify_only else ""),
             )
         if len(fresh) > MAX_FILING_NOTICES:
             self.notifier.add("info", f"...and {len(fresh) - MAX_FILING_NOTICES} more new big-trader filings")
