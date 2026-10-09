@@ -74,6 +74,10 @@ def _text(element: ET.Element, name: str) -> str:
     return (node.text or "").strip()
 
 
+def _is_director(owners: list[ET.Element]) -> bool:
+    return any(_text(owner, "isDirector").lower() in ("1", "true") for owner in owners)
+
+
 def _float(raw: str) -> float:
     try:
         return float(raw.replace(",", ""))
@@ -136,12 +140,14 @@ class SecEdgarClient:
         max_filings: int,
         officer_titles: list[str] | None = None,
         ignore_planned_sales: bool = True,
+        other_insiders_notify_only: bool = False,
     ) -> list[TraderSignal]:
         """Open-market buys/sells from Form 4 filings listed under `cik`.
 
         `cik` can be a reporting person (e.g. Donald J. Trump) or an issuer (e.g. Apple).
         When `officer_titles` is set, only filings whose reporting owner's officer title
         matches one of them are kept (e.g. CEO trades in the issuer's own stock).
+        With `other_insiders_notify_only`, everyone else's trades are kept as notify-only.
         """
         signals = []
         for filing in self.filings(cik, {"4"}, since, max_filings):
@@ -152,7 +158,9 @@ class SecEdgarClient:
             except Exception as exc:  # malformed/legacy filings shouldn't stop the feed
                 logger.debug("Skipping Form 4 %s: %s", filing.accession, exc)
                 continue
-            signal = self._parse_form4(root, xml_text, filing, trader_label, officer_titles, ignore_planned_sales)
+            signal = self._parse_form4(
+                root, xml_text, filing, trader_label, officer_titles, ignore_planned_sales, other_insiders_notify_only
+            )
             if signal:
                 signals.append(signal)
         return signals
@@ -165,6 +173,7 @@ class SecEdgarClient:
         trader_label: str | None,
         officer_titles: list[str] | None,
         ignore_planned_sales: bool,
+        other_insiders_notify_only: bool = False,
     ) -> TraderSignal | None:
         symbol = _text(root, "issuerTradingSymbol").upper()
         if not symbol or symbol == "NONE":
@@ -172,12 +181,16 @@ class SecEdgarClient:
 
         owners = [owner for owner in root.iter() if _local(owner.tag) == "reportingOwner"]
         titles = [_text(owner, "officerTitle") for owner in owners]
+        notify_only = False
         if officer_titles:
             wanted = [t.lower() for t in officer_titles]
             if not any(w in title.lower() for title in titles for w in wanted):
-                return None
+                if not other_insiders_notify_only:
+                    return None
+                notify_only = True
         owner_name = _text(root, "rptOwnerName")
-        label = trader_label or f"{owner_name} ({', '.join(t for t in titles if t) or 'insider'})"
+        role = ", ".join(t for t in titles if t) or ("director" if _is_director(owners) else "insider")
+        label = trader_label or f"{owner_name} ({role})"
 
         planned = _text(root, "aff10b5One").lower() in ("1", "true") or "10b5-1" in xml_text
         net_shares = 0.0
@@ -210,6 +223,7 @@ class SecEdgarClient:
             disclosed_on=filing.filed_on,
             traded_on=traded_on,
             detail=f"{verb} {abs(net_shares):,.0f} shares (~${abs(notional):,.0f})",
+            notify_only=notify_only,
         )
 
     # --- 13F -----------------------------------------------------------------

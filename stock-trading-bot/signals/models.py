@@ -11,6 +11,7 @@ class TraderSignal:
 
     `disclosed_on` is when the trade became public; strategies must only act on a
     signal once the (backtest) clock has reached this date to avoid look-ahead bias.
+    `notify_only` signals are shown and announced but never affect trading.
     """
 
     trader: str
@@ -20,6 +21,7 @@ class TraderSignal:
     disclosed_on: date
     traded_on: date | None
     detail: str
+    notify_only: bool = False
 
     def describe(self) -> str:
         traded = f"traded {self.traded_on}, " if self.traded_on else ""
