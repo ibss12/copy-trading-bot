@@ -85,6 +85,7 @@ not non-public insider information; it tells you what they already did, after th
 | Hedge funds / big investors (Buffett, Aschenbrenner, Ackman) | SEC 13F quarterly holdings (free) | up to ~45 days after quarter end | `FOLLOW_FUNDS` |
 | Named insiders (Donald J. Trump, Donald Trump Jr.) | SEC Form 4 (free) | 2 business days | `FOLLOW_INSIDERS` |
 | CEOs of stocks on your watchlist buying/selling their own shares | SEC Form 4 (free) | 2 business days | `TRACK_CEO_TRADES`, `CEO_TITLES` |
+| Other officers/directors of watchlist companies (Discord message only, never traded on) | SEC Form 4 (free) | 2 business days | `NOTIFY_OTHER_INSIDERS` |
 | Nancy Pelosi and other members of Congress | STOCK Act disclosures via [Bargo](https://www.bargo.ai/free-apis/congress) (free, last 3 months; no key needed, or a free `BARGO_API_KEY` for 10x the daily limit when following several politicians), or [Quiver Quantitative](https://www.quiverquant.com/) if `QUIVER_API_KEY` is set (paid) | up to 45 days | `FOLLOW_POLITICIANS`, `BARGO_API_KEY`, `QUIVER_API_KEY` |
 
 How it trades:
