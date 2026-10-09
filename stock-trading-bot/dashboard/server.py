@@ -320,6 +320,8 @@ class Hub:
                     "disclosed_on": s.disclosed_on.isoformat(),
                     "traded_on": s.traded_on.isoformat() if s.traded_on else None,
                     "detail": s.detail,
+                    "reason": s.reason,
+                    "notify_only": s.notify_only,
                 }
                 for s in reversed(active)
             ],

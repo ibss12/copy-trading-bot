@@ -5,6 +5,7 @@ EDGAR fair-access rules: https://www.sec.gov/os/accessing-edgar-data
 
 import json
 import logging
+import re
 import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -26,6 +27,8 @@ TICKERS_TTL_S = 7 * 24 * 3600
 
 # Form 4 transaction codes: P = open-market purchase, S = open-market sale.
 FORM4_ACTIONS = {"P": "buy", "S": "sell"}
+FOOTNOTE_PRICE_NOISE = ("weighted average", "range of prices", "prices ranging", "full information regarding")
+FOOTNOTE_MAX_CHARS = 200
 
 # 13F position changes that count as a signal.
 THIRTEENF_ADD_THRESHOLD = 0.25
@@ -76,6 +79,41 @@ def _text(element: ET.Element, name: str) -> str:
 
 def _is_director(owners: list[ET.Element]) -> bool:
     return any(_text(owner, "isDirector").lower() in ("1", "true") for owner in owners)
+
+
+def _is_senior(titles: list[str], wanted: list[str]) -> bool:
+    """Whole-word title match that ignores "Vice President", "Deputy CFO" and the like."""
+    for title in titles:
+        clean = re.sub(r"\b(vice|deputy|assistant)[\s-]+[\w&]+", " ", title, flags=re.IGNORECASE)
+        if any(re.search(rf"\b{re.escape(w)}\b", clean, re.IGNORECASE) for w in wanted):
+            return True
+    return False
+
+
+def _footnotes(root: ET.Element, ids: list[str]) -> list[str]:
+    """The filer's own notes on the counted transactions, minus boilerplate about prices."""
+    notes = {el.get("id"): " ".join((el.text or "").split()) for el in root.iter() if _local(el.tag) == "footnote"}
+    texts = [notes.get(footnote_id, "") for footnote_id in dict.fromkeys(ids)]
+    return [t for t in texts if t and not any(noise in t.lower() for noise in FOOTNOTE_PRICE_NOISE)]
+
+
+def _is_tax_sale(notes: list[str]) -> bool:
+    return any("withh" in n.lower() and "tax" in n.lower() for n in notes)
+
+
+def _form4_reason(action: str, planned: bool, notes: list[str]) -> str:
+    note = notes[0] if notes else ""
+    if len(note) > FOOTNOTE_MAX_CHARS:
+        note = note[: FOOTNOTE_MAX_CHARS - 3].rstrip() + "..."
+    if action == "buy":
+        why = "Bought on the open market with their own money; insiders usually only do this when they expect the stock to rise."
+    elif _is_tax_sale(notes):
+        why = "Shares sold automatically to pay tax on stock they were awarded. Routine, so it says little about their view."
+    elif planned:
+        why = "Pre-planned sale (scheduled months in advance), so it says little about their view."
+    else:
+        why = "Sold on the open market, not as part of a pre-planned sale."
+    return f"{why} Their note: {note}" if note else why
 
 
 def _float(raw: str) -> float:
@@ -140,14 +178,16 @@ class SecEdgarClient:
         max_filings: int,
         officer_titles: list[str] | None = None,
         ignore_planned_sales: bool = True,
-        other_insiders_notify_only: bool = False,
+        notify_titles: list[str] | None = None,
+        notify_min_sell_usd: float = 0,
     ) -> list[TraderSignal]:
         """Open-market buys/sells from Form 4 filings listed under `cik`.
 
         `cik` can be a reporting person (e.g. Donald J. Trump) or an issuer (e.g. Apple).
         When `officer_titles` is set, only filings whose reporting owner's officer title
         matches one of them are kept (e.g. CEO trades in the issuer's own stock).
-        With `other_insiders_notify_only`, everyone else's trades are kept as notify-only.
+        Owners matching `notify_titles` instead (e.g. CFO) are kept as notify-only, skipping
+        sales below `notify_min_sell_usd`.
         """
         signals = []
         for filing in self.filings(cik, {"4"}, since, max_filings):
@@ -159,7 +199,14 @@ class SecEdgarClient:
                 logger.debug("Skipping Form 4 %s: %s", filing.accession, exc)
                 continue
             signal = self._parse_form4(
-                root, xml_text, filing, trader_label, officer_titles, ignore_planned_sales, other_insiders_notify_only
+                root,
+                xml_text,
+                filing,
+                trader_label,
+                officer_titles,
+                ignore_planned_sales,
+                notify_titles,
+                notify_min_sell_usd,
             )
             if signal:
                 signals.append(signal)
@@ -173,7 +220,8 @@ class SecEdgarClient:
         trader_label: str | None,
         officer_titles: list[str] | None,
         ignore_planned_sales: bool,
-        other_insiders_notify_only: bool = False,
+        notify_titles: list[str] | None = None,
+        notify_min_sell_usd: float = 0,
     ) -> TraderSignal | None:
         symbol = _text(root, "issuerTradingSymbol").upper()
         if not symbol or symbol == "NONE":
@@ -182,10 +230,10 @@ class SecEdgarClient:
         owners = [owner for owner in root.iter() if _local(owner.tag) == "reportingOwner"]
         titles = [_text(owner, "officerTitle") for owner in owners]
         notify_only = False
-        if officer_titles:
-            wanted = [t.lower() for t in officer_titles]
+        if officer_titles or notify_titles:
+            wanted = [t.lower() for t in officer_titles or []]
             if not any(w in title.lower() for title in titles for w in wanted):
-                if not other_insiders_notify_only:
+                if not (notify_titles and _is_senior(titles, notify_titles)):
                     return None
                 notify_only = True
         owner_name = _text(root, "rptOwnerName")
@@ -196,6 +244,7 @@ class SecEdgarClient:
         net_shares = 0.0
         notional = 0.0
         traded_on = None
+        footnote_ids: list[str] = []
         for txn in root.iter():
             if _local(txn.tag) != "nonDerivativeTransaction":
                 continue
@@ -210,10 +259,14 @@ class SecEdgarClient:
             traded_raw = _text(txn, "transactionDate")[:10]
             if traded_raw:
                 traded_on = date.fromisoformat(traded_raw)
+            footnote_ids += [el.get("id", "") for el in txn.iter() if _local(el.tag) == "footnoteId"]
 
         if net_shares == 0:
             return None
         action = "buy" if net_shares > 0 else "sell"
+        notes = _footnotes(root, footnote_ids)
+        if notify_only and action == "sell" and (abs(notional) < notify_min_sell_usd or _is_tax_sale(notes)):
+            return None
         verb = "bought" if action == "buy" else "sold"
         return TraderSignal(
             trader=label,
@@ -224,6 +277,7 @@ class SecEdgarClient:
             traded_on=traded_on,
             detail=f"{verb} {abs(net_shares):,.0f} shares (~${abs(notional):,.0f})",
             notify_only=notify_only,
+            reason=_form4_reason(action, planned, notes),
         )
 
     # --- 13F -----------------------------------------------------------------

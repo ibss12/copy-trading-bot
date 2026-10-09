@@ -74,7 +74,7 @@ def load_signal_feed(watchlist: list[str], since: date) -> SignalFeed:
             ),
         )
 
-    if config.TRACK_CEO_TRADES:
+    if config.TRACK_CEO_TRADES or config.NOTIFY_OTHER_INSIDERS:
         issuer_ciks = _collect_issuer_ciks(sec)
         for symbol in watchlist:
             cik = issuer_ciks.get(symbol)
@@ -87,9 +87,10 @@ def load_signal_feed(watchlist: list[str], since: date) -> SignalFeed:
                     None,
                     since,
                     MAX_FORM4_FILINGS_PER_FILER,
-                    officer_titles=config.CEO_TITLES,
+                    officer_titles=config.CEO_TITLES if config.TRACK_CEO_TRADES else None,
                     ignore_planned_sales=config.IGNORE_PLANNED_SALES,
-                    other_insiders_notify_only=config.NOTIFY_OTHER_INSIDERS,
+                    notify_titles=config.INSIDER_ALERT_TITLES if config.NOTIFY_OTHER_INSIDERS else None,
+                    notify_min_sell_usd=config.INSIDER_ALERT_MIN_SELL_USD,
                 ),
             )
 

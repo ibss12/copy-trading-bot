@@ -179,7 +179,9 @@ class AlertEngine:
                 "success" if signal.action == "buy" else "warning",
                 "big_trader",
                 f"{signal.trader} {verb} {signal.symbol}",
-                f"{signal.detail} ({signal.source}, disclosed {signal.disclosed_on}).",
+                f"{signal.detail} ({signal.source}, disclosed {signal.disclosed_on})."
+                + (f" Why: {signal.reason}" if signal.reason else "")
+                + (" Info only: the bot doesn't trade on this one." if signal.notify_only else ""),
                 signal.symbol,
             )
 
