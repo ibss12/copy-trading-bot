@@ -14,6 +14,7 @@ from unittest import mock
 import requests
 
 from signals.bargo import BARGO_SOURCE, KEYED_PAGE_SIZE, PAGE_SIZE, bargo_congress_signals
+from signals.http import RETRY_AFTER_ERROR_S
 
 
 def trade(ticker: str, kind: str, disclosed: str, member: str = "Nancy Pelosi") -> dict:
@@ -99,6 +100,18 @@ class BargoTest(unittest.TestCase):
             signals = bargo_congress_signals(self.cache, ["Nancy Pelosi"], date(2026, 8, 1))
         self.assertEqual(get.call_count, 1)
         self.assertEqual([s.symbol for s in signals], ["INTC"])
+
+    def test_retries_a_few_hours_after_rate_limit(self):
+        self.fetch([[trade("INTC", "purchase", "2026-08-21")]])
+        for path in (self.cache / "bargo").iterdir():
+            os.utime(path, (0, 0))
+        with mock.patch("signals.http.requests.get", side_effect=requests.HTTPError("429 Too Many Requests")):
+            bargo_congress_signals(self.cache, ["Nancy Pelosi"], date(2026, 8, 1))
+        for path in (self.cache / "bargo").iterdir():
+            os.utime(path, (path.stat().st_mtime - RETRY_AFTER_ERROR_S - 1,) * 2)
+        signals, get = self.fetch([[trade("MCD", "sale", "2026-08-25")]])
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual([s.symbol for s in signals], ["MCD"])
 
     def test_free_key_sent_with_bigger_pages(self):
         with mock.patch("signals.http.requests.get", side_effect=[FakeResponse([])]) as get:

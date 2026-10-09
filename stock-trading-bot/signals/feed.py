@@ -27,15 +27,18 @@ class SignalFeed:
     def net_scores(self, as_of: date, lookback_days: int) -> dict[str, int]:
         """Per symbol: (# people whose latest move is a buy) - (# whose latest move is a sell)."""
         latest: dict[tuple[str, str], TraderSignal] = {}
-        for signal in self.active(as_of, lookback_days):
+        for signal in self.tradable(as_of, lookback_days):
             latest[(signal.trader, signal.symbol)] = signal
         scores: dict[str, int] = defaultdict(int)
         for signal in latest.values():
             scores[signal.symbol] += 1 if signal.action == "buy" else -1
         return dict(scores)
 
+    def tradable(self, as_of: date, lookback_days: int) -> list[TraderSignal]:
+        return [s for s in self.active(as_of, lookback_days) if not s.notify_only]
+
     def reasons(self, symbol: str, as_of: date, lookback_days: int) -> list[TraderSignal]:
-        return [s for s in self.active(as_of, lookback_days) if s.symbol == symbol]
+        return [s for s in self.tradable(as_of, lookback_days) if s.symbol == symbol]
 
 
 def _collect(name: str, fetch) -> list[TraderSignal]:
@@ -86,6 +89,7 @@ def load_signal_feed(watchlist: list[str], since: date) -> SignalFeed:
                     MAX_FORM4_FILINGS_PER_FILER,
                     officer_titles=config.CEO_TITLES,
                     ignore_planned_sales=config.IGNORE_PLANNED_SALES,
+                    other_insiders_notify_only=config.NOTIFY_OTHER_INSIDERS,
                 ),
             )
 

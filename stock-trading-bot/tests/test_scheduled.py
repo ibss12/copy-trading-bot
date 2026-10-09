@@ -36,9 +36,11 @@ class Capture(DiscordNotifier):
     def __init__(self):
         super().__init__("", echo=False)
         self.sent: list[str] = []
+        self.bodies: list[str] = []
 
     def flush(self) -> int:
         self.sent += [n.title for n in self.notices]
+        self.bodies += [n.body for n in self.notices]
         self.notices = []
         return 0
 
@@ -204,6 +206,16 @@ class AlertsTest(ScheduledTestCase):
         self.check(feed=SignalFeed([old, new]), trade=False, session=None).run()
         self.assertEqual(self.sent("Warren Buffett"), [])
         self.assertEqual(len(self.sent("Nancy Pelosi sold AAPL")), 1)
+
+    def test_other_insiders_are_announced_but_never_traded(self):
+        config.STRATEGY = "smart_money"
+        cfo = TraderSignal("Jane Doe (CFO)", "SEC Form 4", "AAPL", "buy", TODAY, TODAY, "bought", notify_only=True)
+        self.check(feed=SignalFeed([]), trade=False, session=None).run()
+        self.check(feed=SignalFeed([cfo]), trade=False, session=None).run()
+        self.assertEqual(self.sent("Jane Doe (CFO) bought AAPL"), ["Jane Doe (CFO) bought AAPL"])
+        self.assertEqual(len([b for b in self.notifier.bodies if "For your info only" in b]), 1)
+        self.assertEqual(SignalFeed([cfo]).net_scores(TODAY, 45), {})
+        self.assertEqual(SignalFeed([cfo]).reasons("AAPL", TODAY, 45), [])
 
     def test_price_move_alert_once_per_level(self):
         jump = series(100, 100, 100, 100, 106)

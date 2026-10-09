@@ -1,9 +1,15 @@
 import hashlib
 import json
+import logging
+import os
 import time
 from pathlib import Path
 
 import requests
+
+logger = logging.getLogger(__name__)
+
+RETRY_AFTER_ERROR_S = 2 * 3600
 
 
 class CachedHttp:
@@ -38,7 +44,7 @@ class CachedHttp:
         """GET `url`. `ttl_s=None` caches forever (use for immutable documents).
 
         `stale_on_error` returns an expired cached copy, if any, when the request fails,
-        and keeps using it for another `ttl_s` before retrying.
+        and keeps using it for up to `RETRY_AFTER_ERROR_S` before retrying.
         """
         cached = self._read_cache(url, ttl_s)
         if cached is not None:
@@ -47,11 +53,13 @@ class CachedHttp:
         try:
             response = requests.get(url, headers=self.headers, timeout=self.timeout_s)
             response.raise_for_status()
-        except requests.RequestException:
+        except requests.RequestException as exc:
             stale = self._read_cache(url, None) if stale_on_error else None
             if stale is None:
                 raise
-            self._cache_path(url).touch()
+            logger.warning("Using an older saved copy because the request failed: %s", exc)
+            retry_at = time.time() - (ttl_s or 0) + min(ttl_s or 0, RETRY_AFTER_ERROR_S)
+            os.utime(self._cache_path(url), (retry_at, retry_at))
             return stale
         self._cache_path(url).write_text(response.text)
         return response.text
