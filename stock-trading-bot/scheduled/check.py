@@ -91,7 +91,10 @@ def next_check_at(
             if candidate >= market_close and summary_pending:
                 candidate = market_close + SUMMARY_DELAY + timedelta(minutes=1)
         elif summary_pending:
-            candidate = max(now_utc + timedelta(minutes=1), market_close + SUMMARY_DELAY + timedelta(minutes=1))
+            after_summary = market_close + SUMMARY_DELAY
+            candidate = (
+                after_summary + timedelta(minutes=1) if now_utc < after_summary else now_utc + timedelta(minutes=15)
+            )
         else:
             candidate = None
     else:
@@ -484,21 +487,15 @@ class ScheduledCheck:
                 parts.append(f"SOLD {_usd_short(sum(trade.usd for trade in sells))} by {who}{qualifier}")
             stock_lines.append(f"{symbol}: " + " · ".join(parts))
 
-        lines = stock_lines[:25]
-        omitted = len(stock_lines) - len(lines)
-        if omitted:
-            lines.append(f"...and {omitted} more stocks")
-        body = "\n".join([*lines, legend])
-        while len(body) > MAX_DESCRIPTION and lines:
-            if lines[-1].startswith("...and "):
-                lines.pop()
-                omitted += int(lines.pop().split(" more stocks")[0].removeprefix("...and "))
-            else:
-                lines.pop()
-                omitted += 1
-            if omitted:
-                lines.append(f"...and {omitted} more stocks")
-            body = "\n".join([*lines, legend])
+        def render(n):
+            shown = stock_lines[:n]
+            extra = len(stock_lines) - n
+            return "\n".join([*shown, *([f"...and {extra} more stocks"] if extra else []), legend])
+
+        n = min(25, len(stock_lines))
+        while n > 0 and len(render(n)) > MAX_DESCRIPTION:
+            n -= 1
+        body = render(n)
         self.notifier.add("info", f"Insider trades: {weekday}", body)
 
     def _inactivity_warning(self) -> str:

@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 import config
-from notify.discord import DiscordNotifier
+from notify.discord import MAX_DESCRIPTION, DiscordNotifier
 from scheduled.check import SUMMARY_DELAY, ScheduledCheck, Session, next_check_at
 from signals.feed import SignalFeed
 from signals.models import InsiderTrade, TraderSignal
@@ -303,6 +303,42 @@ class AlertsTest(ScheduledTestCase):
         self.check(trade=False, session=CLOSED, insider_loader=loader).run()
         self.assertEqual(len([title for title in self.notifier.sent if "Insider trades:" in title]), 1)
 
+    def test_daily_insider_digest_truncates_long_stock_lines_with_correct_count(self):
+        trades = [
+            InsiderTrade(
+                f"X{i:02}",
+                "N" * 180,
+                "R" * 100,
+                "buy",
+                1,
+                100,
+                False,
+                False,
+                TODAY,
+                f"long-{i}",
+            )
+            for i in range(30)
+        ]
+        self.check(
+            trade=False,
+            session=CLOSED,
+            insider_loader=lambda watchlist, since: trades,
+        ).run()
+
+        body = self.notifier.bodies[self.notifier.sent.index("Insider trades: Wed 30 Sep")]
+        legend = (
+            "Pre-planned = scheduled months ahead (10b5-1), usually less meaningful. "
+            "Tax = shares sold to pay tax on vested stock."
+        )
+        stock_lines = [line for line in body.splitlines() if line != legend and not line.startswith("...and ")]
+        omitted_line = next(line for line in body.splitlines() if line.startswith("...and "))
+        omitted = int(omitted_line.removeprefix("...and ").removesuffix(" more stocks"))
+
+        self.assertLessEqual(len(body), MAX_DESCRIPTION)
+        self.assertTrue(body.endswith(legend))
+        self.assertLessEqual(len(stock_lines), 25)
+        self.assertEqual(omitted, len(trades) - len(stock_lines))
+
     def test_daily_insider_digest_first_run_shows_today_only_then_only_unseen(self):
         yesterday = TODAY - timedelta(days=1)
         old = InsiderTrade("AAPL", "Old", "director", "buy", 1, 100, False, False, yesterday, "old")
@@ -400,8 +436,13 @@ class NextCheckTest(unittest.TestCase):
         near_close = datetime(2026, 9, 30, 19, 55, tzinfo=timezone.utc)
         expected = self.close + SUMMARY_DELAY + timedelta(minutes=1)
         self.assertEqual(next_check_at(near_close, {}, self.session_for), expected)
-        after_close = datetime(2026, 9, 30, 20, 3, tzinfo=timezone.utc)
-        self.assertEqual(next_check_at(after_close, {}, self.session_for), expected)
+        just_after_close = self.close + timedelta(minutes=1)
+        self.assertEqual(next_check_at(just_after_close, {}, self.session_for), expected)
+        later_after_close = self.close + timedelta(minutes=30)
+        self.assertEqual(
+            next_check_at(later_after_close, {}, self.session_for),
+            later_after_close + timedelta(minutes=15),
+        )
 
     def test_after_close_summary_done_plans_next_session(self):
         tomorrow = self.today + timedelta(days=1)
