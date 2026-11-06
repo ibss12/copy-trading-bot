@@ -6,7 +6,7 @@ from datetime import date
 from lumibot.entities import Order
 from lumibot.strategies.strategy import Strategy
 
-from strategies.rules import Decision, SmaSignal, sma_decision
+from strategies.rules import Decision, Holding, RiskRules, SmaSignal, sma_decision
 
 __all__ = ["SmaCrossover", "SmaSignal"]
 
@@ -21,6 +21,12 @@ class SmaCrossover(Strategy):
         no new buys are placed for the rest of the session (optionally liquidates everything).
         A loss detected at the close halts buying for the next session, so the guard also
         works with daily (1D) cadences where no intraday iteration happens.
+      * Exits, checked before the SMA cross-down (a pct of 0 turns it off):
+        `stop_loss_pct` (price <= entry * (1 - pct)), `trailing_stop_pct` (price <= peak * (1 - pct)),
+        `take_profit_pct` (price >= entry * (1 + pct)) and `exit_below_short_sma` (price < short SMA).
+        Entry is the position's average fill price when the broker reports it, else the bot's own
+        buy fill price, else the first price seen; peak is the highest price seen since entry.
+      * `require_price_above_long_sma`: only buy while the price is above the long SMA.
     """
 
     parameters = {
@@ -32,6 +38,11 @@ class SmaCrossover(Strategy):
         "max_daily_loss_pct": 0.03,
         "liquidate_on_daily_loss": False,
         "price_alert_pcts": [5.0, 10.0],
+        "stop_loss_pct": 0.08,
+        "trailing_stop_pct": 0.10,
+        "take_profit_pct": 0.20,
+        "exit_below_short_sma": True,
+        "require_price_above_long_sma": False,
         "sleeptime": "1D",
     }
 
@@ -48,6 +59,14 @@ class SmaCrossover(Strategy):
         self.halted_for_day = False
         self.halt_next_day = False
         self.alerts_sent: set[tuple[str, float]] = set()
+        self.risk_rules = RiskRules(
+            stop_loss_pct=float(self.parameters["stop_loss_pct"]),
+            trailing_stop_pct=float(self.parameters["trailing_stop_pct"]),
+            take_profit_pct=float(self.parameters["take_profit_pct"]),
+            exit_below_short_sma=bool(self.parameters["exit_below_short_sma"]),
+            require_price_above_long_sma=bool(self.parameters["require_price_above_long_sma"]),
+        )
+        self.holdings: dict[str, Holding] = {}
 
     def before_market_opens(self):
         self._start_new_day()
@@ -69,6 +88,7 @@ class SmaCrossover(Strategy):
             if signal is None:
                 continue
             self._price_alert(symbol, signal)
+            self.track_holding(symbol, signal.price)
             self.decide(symbol, signal)
 
     # --- Decision logic (overridden by subclasses) ----------------------------
@@ -78,7 +98,14 @@ class SmaCrossover(Strategy):
         return list(dict.fromkeys(self.symbols + held))
 
     def decide(self, symbol: str, signal: SmaSignal) -> None:
-        self.act(symbol, signal, sma_decision(signal, self.held_quantity(symbol) > 0, symbol in self.symbols))
+        decision = sma_decision(
+            signal,
+            self.held_quantity(symbol) > 0,
+            symbol in self.symbols,
+            rules=self.risk_rules,
+            holding=self.holdings.get(symbol),
+        )
+        self.act(symbol, signal, decision)
 
     def act(self, symbol: str, signal: SmaSignal, decision: Decision | None) -> None:
         if decision is None:
@@ -100,6 +127,34 @@ class SmaCrossover(Strategy):
             return None
         closes = bars.df["close"].astype(float).tolist()
         return SmaSignal.from_closes(closes, self.short_window, self.long_window)
+
+    def track_holding(self, symbol: str, price: float) -> Holding | None:
+        """Update entry/peak price for a held symbol (forgotten once it is no longer held)."""
+        position = self.get_position(symbol)
+        if not position or position.quantity <= 0:
+            self.holdings.pop(symbol, None)
+            return None
+        known = self.holdings.get(symbol)
+        average = getattr(position, "avg_fill_price", None)
+        entry = float(average) if average else (known.entry_price if known else price)
+        peak = max(known.peak_price if known else entry, entry, price)
+        self.holdings[symbol] = Holding(entry_price=entry, peak_price=peak)
+        return self.holdings[symbol]
+
+    def on_filled_order(self, position, order, price, quantity, multiplier):
+        symbol = order.asset.symbol
+        if not order.is_buy_order():
+            if not position or position.quantity <= 0:
+                self.holdings.pop(symbol, None)
+            return
+        price, quantity = float(price), float(quantity)
+        known = self.holdings.get(symbol)
+        before = float(position.quantity) - quantity if position else 0.0
+        if known and before > 0:
+            entry = (known.entry_price * before + price * quantity) / (before + quantity)
+            self.holdings[symbol] = Holding(entry_price=entry, peak_price=max(known.peak_price, price))
+        else:
+            self.holdings[symbol] = Holding(entry_price=price, peak_price=price)
 
     def held_quantity(self, symbol: str) -> float:
         position = self.get_position(symbol)

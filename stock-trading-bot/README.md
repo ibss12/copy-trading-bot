@@ -75,6 +75,32 @@ Everything lives in `.env` (see `.env.example` for all options):
 - `LIQUIDATE_ON_DAILY_LOSS=true` — additionally sell everything when the daily loss limit is hit
 - `PRICE_ALERT_PCTS` — log an alert when a stock moves this much in a day in percent (default `5,10`)
 
+**When the bot sells.** For every stock the bot holds, these exits are checked first, in this order, on
+every check (live, scheduled and backtest — the rules live in `strategies/rules.py`). Set a percentage
+to `0` to turn that exit off.
+
+- `STOP_LOSS_PCT` (default `0.08`) — sell when the price is 8% or more below the bot's entry price.
+- `TRAILING_STOP_PCT` (default `0.10`) — sell when the price is 10% or more below the highest price
+  seen since the bot bought (locks in gains after a run-up).
+- `TAKE_PROFIT_PCT` (default `0.20`) — sell when the price is 20% or more above the entry price.
+- `EXIT_BELOW_SHORT_SMA` (default `true`) — sell as soon as the price closes/trades below the short
+  (20-day) SMA, instead of waiting for the slower 20/50 cross-down. While on, the bot also doesn't buy
+  a stock that is below its short SMA (it would sell it again on the next check).
+
+After those, the old sells still apply: the 20/50 SMA cross-down and (smart money) followed traders
+being net sellers. Example: bought at $100 → sells at $92 (stop-loss), at $120 (take-profit), or, if it
+first rose to $115, at $103.50 (trailing stop).
+
+*Entry price* is the broker's average fill price for the position when it reports one (Alpaca), else
+the price of the bot's own buy fills, else the first price the bot saw after it noticed the position
+(e.g. after a restart). Peak price is the highest price seen on a check since then. Both are kept in
+memory for the live bot (so a restart starts them again from the current price), and in
+`.cache/scheduled/state.json` for the GitHub Actions bot.
+
+**Optional buy filter.** `REQUIRE_PRICE_ABOVE_LONG_SMA=true` (default `false`) — only buy while the
+price is above the long (50-day) SMA, so the bot skips buy signals in a stock that is still in a
+longer downtrend.
+
 ### Following the big traders (`STRATEGY=smart_money`)
 
 All data is **public** and **delayed** — people legally have days to months to report trades. This is
@@ -92,7 +118,8 @@ How it trades:
 
 - Each signal counts +1 (bought / added / new position) or −1 (sold / cut / exited) for that ticker, for
   `SIGNAL_LOOKBACK_DAYS` after it was **disclosed**.
-- **Net sellers** on a stock you hold → the bot sells it.
+- **Net sellers** on a stock you hold → the bot sells it (the stop-loss / trailing-stop / take-profit /
+  short-SMA exits from [Risk controls](#risk-controls) apply too).
 - **Net buyers** → the bot buys it, as long as the SMA trend agrees (`REQUIRE_SMA_CONFIRMATION=true`).
 - With `FOLLOW_EXPANDS_WATCHLIST=true`, stocks the big names are buying get added to your watchlist.
 - Otherwise the normal SMA crossover rules apply.
@@ -156,8 +183,8 @@ of each one, and still let you trade yourself.
 How it works:
 
 - **Same strategy and risk limits** as on Alpaca (SMA / smart money, 10% per stock, max positions,
-  daily-loss limit, skip a stock that already has an open order). Prices and charts still come from
-  Yahoo, because Trading 212's API has no live price feed.
+  stop-loss / trailing stop / take-profit exits, daily-loss limit, skip a stock that already has an
+  open order). Prices and charts still come from Yahoo, because Trading 212's API has no live price feed.
 - **Your trades vs. the bot's:** Trading 212 only reports one combined position per stock, so the bot
   records every order it places in `.cache/trading212/bot_ledger.json` and counts its own filled
   shares. The strategy only sees those shares, and a bot sell is capped at them, so it never sells

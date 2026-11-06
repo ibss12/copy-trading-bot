@@ -58,6 +58,11 @@ SETTINGS = {
     "SIGNAL_LOOKBACK_DAYS": 45,
     "FOLLOW_EXPANDS_WATCHLIST": True,
     "REQUIRE_SMA_CONFIRMATION": True,
+    "STOP_LOSS_PCT": 0.08,
+    "TRAILING_STOP_PCT": 0.10,
+    "TAKE_PROFIT_PCT": 0.20,
+    "EXIT_BELOW_SHORT_SMA": True,
+    "REQUIRE_PRICE_ABOVE_LONG_SMA": False,
 }
 
 
@@ -123,6 +128,49 @@ class TradingTest(ScheduledTestCase):
         self.check({"AAPL": DEATH}).run()
         self.assertEqual([p["quantity"] for p in self.fake.posts], [-3])
         self.assertTrue(self.sent("Bot SELLING 3 AAPL"))
+
+    def bought_at_12(self):
+        self.check({"AAPL": GOLDEN}).run()
+        self.fake.fill(self.fake.pending[0]["id"], price=12.0)
+
+    def last_sell_reason(self) -> str:
+        return next(b for t, b in zip(self.notifier.sent[::-1], self.notifier.bodies[::-1]) if "SELLING" in t)
+
+    def test_stop_loss_from_the_bots_fill_price(self):
+        self.bought_at_12()
+        self.check({"AAPL": series(10, 10, 10, 12, 11)}, now=NOW + timedelta(minutes=30)).run()
+        self.assertEqual([p["quantity"] for p in self.fake.posts], [83, -83])
+        self.assertIn("stop-loss", self.last_sell_reason())
+
+    def test_take_profit(self):
+        self.bought_at_12()
+        self.check({"AAPL": series(10, 10, 12, 13, 15)}, now=NOW + timedelta(minutes=30)).run()
+        self.assertEqual([p["quantity"] for p in self.fake.posts], [83, -83])
+        self.assertIn("take-profit", self.last_sell_reason())
+
+    def test_trailing_stop_from_the_peak(self):
+        self.bought_at_12()
+        self.check({"AAPL": series(10, 10, 12, 13, 14)}, now=NOW + timedelta(minutes=30)).run()
+        self.assertEqual(len(self.fake.posts), 1, "up 17%: keep holding")
+        self.check({"AAPL": series(10, 12, 13, 14, 12.5)}, now=NOW + timedelta(minutes=60)).run()
+        self.assertEqual([p["quantity"] for p in self.fake.posts], [83, -83])
+        self.assertIn("trailing stop", self.last_sell_reason())
+        self.assertIn("peak 14.00", self.last_sell_reason())
+
+    def test_exit_below_short_sma(self):
+        self.bought_at_12()
+        self.check({"AAPL": series(10, 10, 12, 13, 12.2)}, now=NOW + timedelta(minutes=30)).run()
+        self.assertEqual([p["quantity"] for p in self.fake.posts], [83, -83])
+        self.assertIn("below short SMA", self.last_sell_reason())
+
+    def test_stop_loss_uses_first_seen_price_for_older_bot_shares(self):
+        self.fake.positions["AAPL_US_EQ"] = 10
+        self.bot_ledger.apply_fill("old", "AAPL", 3)
+        self.check({"AAPL": FLAT}).run()
+        self.assertEqual(self.fake.posts, [])
+        self.check({"AAPL": series(10, 10, 10, 10, 9.1)}, now=NOW + timedelta(minutes=30)).run()
+        self.assertEqual([p["quantity"] for p in self.fake.posts], [-3])
+        self.assertIn("stop-loss", self.last_sell_reason())
 
     def test_uncertain_order_is_never_resent_and_found_later(self):
         self.fake.post_status = 500

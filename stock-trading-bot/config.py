@@ -109,6 +109,13 @@ MAX_OPEN_POSITIONS = _int("MAX_OPEN_POSITIONS", 8)
 MAX_DAILY_LOSS_PCT = _float("MAX_DAILY_LOSS_PCT", 0.03)
 LIQUIDATE_ON_DAILY_LOSS = _bool("LIQUIDATE_ON_DAILY_LOSS", False)
 PRICE_ALERT_PCTS = [float(pct) for pct in _list("PRICE_ALERT_PCTS", "5,10")]
+# Exits for positions the bot holds, checked before the SMA cross-down (0 turns a pct exit off).
+STOP_LOSS_PCT = _float("STOP_LOSS_PCT", 0.08)
+TRAILING_STOP_PCT = _float("TRAILING_STOP_PCT", 0.10)
+TAKE_PROFIT_PCT = _float("TAKE_PROFIT_PCT", 0.20)
+EXIT_BELOW_SHORT_SMA = _bool("EXIT_BELOW_SHORT_SMA", True)
+# Entry filter: only buy while the price is above the long SMA.
+REQUIRE_PRICE_ABOVE_LONG_SMA = _bool("REQUIRE_PRICE_ABOVE_LONG_SMA", False)
 
 # --- Smart money -------------------------------------------------------------
 FOLLOW_FUNDS = _filers(
@@ -157,6 +164,11 @@ def strategy_parameters() -> dict:
         "max_daily_loss_pct": MAX_DAILY_LOSS_PCT,
         "liquidate_on_daily_loss": LIQUIDATE_ON_DAILY_LOSS,
         "price_alert_pcts": PRICE_ALERT_PCTS,
+        "stop_loss_pct": STOP_LOSS_PCT,
+        "trailing_stop_pct": TRAILING_STOP_PCT,
+        "take_profit_pct": TAKE_PROFIT_PCT,
+        "exit_below_short_sma": EXIT_BELOW_SHORT_SMA,
+        "require_price_above_long_sma": REQUIRE_PRICE_ABOVE_LONG_SMA,
         "signal_lookback_days": SIGNAL_LOOKBACK_DAYS,
         "follow_expands_watchlist": FOLLOW_EXPANDS_WATCHLIST,
         "require_sma_confirmation": REQUIRE_SMA_CONFIRMATION,
@@ -170,6 +182,12 @@ def validate() -> None:
         raise ValueError("MAX_POSITION_PCT must be in (0, 1]")
     if not 0 <= MAX_DAILY_LOSS_PCT < 1:
         raise ValueError("MAX_DAILY_LOSS_PCT must be in [0, 1)")
+    if not 0 <= STOP_LOSS_PCT < 1:
+        raise ValueError("STOP_LOSS_PCT must be in [0, 1)")
+    if not 0 <= TRAILING_STOP_PCT < 1:
+        raise ValueError("TRAILING_STOP_PCT must be in [0, 1)")
+    if TAKE_PROFIT_PCT < 0:
+        raise ValueError("TAKE_PROFIT_PCT must be >= 0")
     if MAX_OPEN_POSITIONS <= 0:
         raise ValueError("MAX_OPEN_POSITIONS must be positive")
     if STRATEGY not in ("sma", "smart_money"):
