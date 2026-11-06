@@ -9,7 +9,7 @@ import json
 import logging
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -21,7 +21,7 @@ import config
 from dashboard.advice import advise
 from notify.discord import DiscordNotifier
 from signals.feed import SignalFeed, load_signal_feed
-from strategies.rules import Decision, SmaSignal, sma_decision, smart_money_decision
+from strategies.rules import Decision, PositionState, SmaSignal, sma_decision, smart_money_decision
 from trading212.accounts import AccountProfile
 from trading212.broker import order_side, order_ticker
 from trading212.client import OrderUncertain, Trading212Error, symbol_from_ticker, validate_base_url
@@ -55,6 +55,7 @@ class Account:
     cash: float
     held: dict[str, float]
     bot: dict[str, float]
+    avg_price: dict[str, float] = field(default_factory=dict)
 
 
 def nyse_session(day: date) -> Session | None:
@@ -146,7 +147,7 @@ class ScheduledCheck:
         state = self.state
         for key in ("open_orders", "uncertain", "trades_today"):
             state.setdefault(key, [])
-        for key in ("advice", "errors", "moves"):
+        for key in ("advice", "errors", "moves", "positions"):
             state.setdefault(key, {})
         if state.get("day") == self.today.isoformat():
             return
@@ -381,9 +382,11 @@ class ScheduledCheck:
             currency = summary.get("currency") or "USD"
             fx = self.fx(currency)
             held: dict[str, float] = {}
+            avg_price: dict[str, float] = {}
             for row in self.client.positions():
                 symbol = symbol_from_ticker(order_ticker(row))
                 held[symbol] = held.get(symbol, 0.0) + float(row.get("quantity") or 0)
+                avg_price[symbol] = float(row.get("averagePricePaid") or 0)
         except (Trading212Error, OSError, ValueError) as exc:
             self._error_once("Couldn't reach your Trading 212 practice account", str(exc))
             return None
@@ -395,6 +398,7 @@ class ScheduledCheck:
             cash=float((summary.get("cash") or {}).get("availableToTrade") or 0) * fx,
             held=held,
             bot=self.ledger.reconcile(held),
+            avg_price=avg_price,
         )
 
     def _settle_orders(self) -> None:
@@ -452,7 +456,9 @@ class ScheduledCheck:
     def _order_finished(self, entry: dict, status: str, filled: float, price: float) -> None:
         symbol, side = entry["symbol"], entry["side"]
         if filled > 0:
+            before = self.ledger.bot_shares().get(symbol, 0.0)
             if self.ledger.apply_fill(entry["id"], symbol, filled if side == "buy" else -filled):
+                self._track_fill(symbol, side, before, filled, price)
                 verb = "bought" if side == "buy" else "sold"
                 text = f"{verb} {filled:g} {symbol} at ${price:,.2f}"
                 self.state["trades_today"].append(text)
@@ -467,6 +473,39 @@ class ScheduledCheck:
             self.notifier.add("danger", f"Trading 212 did not fill the bot's {side.upper()} {symbol} order", status)
 
     # ------------------------------------------------------------------ trading
+    def _track_fill(self, symbol: str, side: str, before: float, filled: float, price: float) -> None:
+        """Entry price of the bot's shares (average of its buys); forgotten once they are all sold."""
+        positions = self.state["positions"]
+        if side == "sell":
+            if before - filled <= 1e-9:
+                positions.pop(symbol, None)
+            return
+        if price <= 0:
+            return
+        old = positions.get(symbol)
+        if old and before > 0:
+            entry = (old["entry"] * before + price * filled) / (before + filled)
+            positions[symbol] = {"entry": entry, "peak": max(old["peak"], price)}
+        else:
+            positions[symbol] = {"entry": price, "peak": price}
+
+    def _position(self, account: Account, symbol: str, price: float) -> PositionState | None:
+        """Entry/peak of the bot's holding, updated with the latest price. Seeded from Trading 212's
+        average price when all shares are the bot's, otherwise from the first price seen."""
+        positions = self.state["positions"]
+        if account.bot.get(symbol, 0.0) <= 0:
+            positions.pop(symbol, None)
+            return None
+        row = positions.get(symbol)
+        if row is None:
+            avg = account.avg_price.get(symbol, 0.0)
+            only_bot = abs(account.held.get(symbol, 0.0) - account.bot[symbol]) < 1e-6
+            entry = avg if avg > 0 and only_bot else price
+            row = {"entry": entry, "peak": entry}
+        state = PositionState(float(row["entry"]), float(row["peak"])).update(price)
+        positions[symbol] = {"entry": state.entry_price, "peak": state.peak_price}
+        return state
+
     def _halted(self, account: Account) -> bool:
         today = self.today.isoformat()
         if self.state.get("halted_day") == today:
@@ -491,17 +530,26 @@ class ScheduledCheck:
                     self._submit(symbol, qty, "sell", 0.0, "daily loss limit reached")
         return True
 
-    def _decide(self, symbol: str, signal: SmaSignal, held: bool, scores: dict, feed: SignalFeed | None):
+    def _decide(
+        self,
+        symbol: str,
+        signal: SmaSignal,
+        position: PositionState | None,
+        scores: dict,
+        feed: SignalFeed | None,
+    ):
         on_watchlist = symbol in config.WATCHLIST
+        held = position is not None
+        rules = config.trade_rules()
         if config.STRATEGY != "smart_money":
-            return sma_decision(signal, held, on_watchlist)
+            return sma_decision(signal, held, on_watchlist, position, rules)
 
         def who(action: str) -> str:
             reasons = feed.reasons(symbol, self.today, config.SIGNAL_LOOKBACK_DAYS) if feed else []
             return "; ".join(f"{s.trader} {s.detail}" for s in reasons if s.action == action)
 
         return smart_money_decision(
-            signal, held, on_watchlist, scores.get(symbol, 0), config.REQUIRE_SMA_CONFIRMATION, who
+            signal, held, on_watchlist, scores.get(symbol, 0), config.REQUIRE_SMA_CONFIRMATION, who, position, rules
         )
 
     def _trade(self, account: Account, closes: dict[str, Closes], scores: dict, feed: SignalFeed | None) -> None:
@@ -519,7 +567,8 @@ class ScheduledCheck:
             signal = SmaSignal.from_closes([c for _, c in series], config.SMA_SHORT_WINDOW, config.SMA_LONG_WINDOW)
             if signal is None:
                 continue
-            decision: Decision | None = self._decide(symbol, signal, symbol in held, scores, feed)
+            position = self._position(account, symbol, signal.price)
+            decision: Decision | None = self._decide(symbol, signal, position, scores, feed)
             if decision is None:
                 continue
             if symbol in busy:
