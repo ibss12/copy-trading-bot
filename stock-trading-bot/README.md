@@ -68,7 +68,7 @@ Everything lives in `.env` (see `.env.example` for all options):
 
 ### Risk controls
 
-- `MAX_POSITION_PCT` — max fraction of the portfolio in any one stock (default `0.10` = 10%)
+- `MAX_POSITION_PCT` — max fraction of the portfolio in any one stock (default `0.125` = 12.5%)
 - `MAX_OPEN_POSITIONS` — max number of stocks held at once
 - `MAX_DAILY_LOSS_PCT` — if the portfolio drops this much from the previous close, the bot stops buying
   for the rest of the session; a loss seen at the close blocks buying for the next session (set `0` to
@@ -83,9 +83,9 @@ price since buying. Set a percentage to `0` or `off` to turn that rule off.
 
 | Setting | Default | Sells when... | Example (bought at $100) |
 | --- | --- | --- | --- |
-| `STOP_LOSS_PCT` | `0.08` | price falls this far below what the bot paid | sells at $92 or less |
-| `TRAILING_STOP_PCT` | `0.10` | price falls this far below the highest price since buying | went up to $130, sells at $117 |
-| `TAKE_PROFIT_PCT` | `0.20` | price rises this far above what the bot paid | sells at $120 or more |
+| `STOP_LOSS_PCT` | `0.10` | price falls this far below what the bot paid | sells at $90 or less |
+| `TRAILING_STOP_PCT` | `0.12` | price falls this far below the highest price since buying | went up to $130, sells at $114.40 |
+| `TAKE_PROFIT_PCT` | `0.30` | price rises this far above what the bot paid | sells at $130 or more |
 | `EXIT_BELOW_SHORT_SMA` | `true` | price closes below the short SMA (e.g. the 20-day average) | |
 
 The SMA bearish crossover (and, in `smart_money`, followed traders selling) still sells too.

@@ -114,16 +114,16 @@ SMA_LONG_WINDOW = _int("SMA_LONG_WINDOW", 50)
 LIVE_SLEEPTIME = _str("LIVE_SLEEPTIME", "30M")
 
 # --- Risk controls -----------------------------------------------------------
-MAX_POSITION_PCT = _float("MAX_POSITION_PCT", 0.10)
+MAX_POSITION_PCT = _float("MAX_POSITION_PCT", 0.125)
 MAX_OPEN_POSITIONS = _int("MAX_OPEN_POSITIONS", 8)
 MAX_DAILY_LOSS_PCT = _float("MAX_DAILY_LOSS_PCT", 0.03)
 LIQUIDATE_ON_DAILY_LOSS = _bool("LIQUIDATE_ON_DAILY_LOSS", False)
 PRICE_ALERT_PCTS = [float(pct) for pct in _list("PRICE_ALERT_PCTS", "5,10")]
 
 # Exit stack, checked before the SMA cross on every holding (set a pct to 0/off to disable).
-STOP_LOSS_PCT = _optional_float("STOP_LOSS_PCT", 0.08)
-TRAILING_STOP_PCT = _optional_float("TRAILING_STOP_PCT", 0.10)
-TAKE_PROFIT_PCT = _optional_float("TAKE_PROFIT_PCT", 0.20)
+STOP_LOSS_PCT = _optional_float("STOP_LOSS_PCT", 0.10)
+TRAILING_STOP_PCT = _optional_float("TRAILING_STOP_PCT", 0.12)
+TAKE_PROFIT_PCT = _optional_float("TAKE_PROFIT_PCT", 0.30)
 EXIT_BELOW_SHORT_SMA = _bool("EXIT_BELOW_SHORT_SMA", True)
 # Entry filters: only buy above the long SMA / when RSI(14) is at most this (blank = no RSI filter).
 REQUIRE_PRICE_ABOVE_LONG_SMA = _bool("REQUIRE_PRICE_ABOVE_LONG_SMA", False)

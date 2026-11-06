@@ -144,14 +144,14 @@ class TradingTest(ScheduledTestCase):
         with mock.patch.object(config, "TAKE_PROFIT_PCT", None):
             self.check({"AAPL": series(90, 95, 100, 105, 120)}).run()
             self.assertEqual(self.fake.posts, [], "entry seeded from Trading 212's average price (100)")
-            self.check({"AAPL": series(95, 100, 105, 120, 107)}, now=NOW + timedelta(minutes=30)).run()
+            self.check({"AAPL": series(95, 100, 105, 120, 105)}, now=NOW + timedelta(minutes=30)).run()
         self.assertEqual([p["quantity"] for p in self.fake.posts], [-3])
         self.assertTrue(any("Why: trailing stop" in b and "peak 120.00" in b for b in self.notifier.bodies))
 
     def test_take_profit_from_the_bots_fill_price(self):
         self.check({"AAPL": GOLDEN}).run()
         self.fake.fill(self.fake.pending[0]["id"], price=12.0)
-        self.check({"AAPL": series(10, 10, 12, 13, 15)}, now=NOW + timedelta(minutes=30)).run()
+        self.check({"AAPL": series(10, 10, 12, 13, 16)}, now=NOW + timedelta(minutes=30)).run()
         self.assertEqual([p["quantity"] for p in self.fake.posts], [83, -83])
         self.assertTrue(any("Why: take-profit" in b and "entry 12.00" in b for b in self.notifier.bodies))
 
@@ -167,7 +167,7 @@ class TradingTest(ScheduledTestCase):
         self.bot_ledger.apply_fill("old", "AAPL", 3)
         self.check({"AAPL": FLAT}).run()
         self.assertEqual(self.fake.posts, [], "average price includes your shares, so entry is the first price seen")
-        self.check({"AAPL": series(10, 10, 10, 10, 9.1)}, now=NOW + timedelta(minutes=30)).run()
+        self.check({"AAPL": series(10, 10, 10, 10, 8.9)}, now=NOW + timedelta(minutes=30)).run()
         self.assertEqual([p["quantity"] for p in self.fake.posts], [-3])
         self.assertTrue(any("Why: stop-loss" in b and "entry 10.00" in b for b in self.notifier.bodies))
 
