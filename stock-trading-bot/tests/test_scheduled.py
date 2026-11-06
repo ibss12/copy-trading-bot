@@ -3,16 +3,20 @@
 Run: python -m unittest tests.test_scheduled -v
 """
 
+import io
 import json
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from unittest import mock
 
 import config
 from notify.discord import DiscordNotifier
-from scheduled.check import ScheduledCheck, Session
+from scheduled.check import SUMMARY_DELAY, ScheduledCheck, Session, next_check_at
 from signals.feed import SignalFeed
-from signals.models import TraderSignal
+from signals.models import InsiderTrade, TraderSignal
 from strategies.rules import SmaSignal
 from tests.test_trading212 import KEY, SECRET, ServerTestCase
 from trading212.accounts import AccountProfile
@@ -58,6 +62,7 @@ SETTINGS = {
     "SIGNAL_LOOKBACK_DAYS": 45,
     "FOLLOW_EXPANDS_WATCHLIST": True,
     "REQUIRE_SMA_CONFIRMATION": True,
+    "INSIDER_DAILY_SUMMARY": True,
 }
 
 
@@ -74,7 +79,7 @@ class ScheduledTestCase(ServerTestCase):
         self.notifier = Capture()
         self.state_path = self.tmp / "state.json"
 
-    def check(self, closes=None, now=NOW, session=OPEN, trade=True, feed=None):
+    def check(self, closes=None, now=NOW, session=OPEN, trade=True, feed=None, insider_loader=None):
         closes = closes or {}
         return ScheduledCheck(
             self.notifier,
@@ -85,6 +90,7 @@ class ScheduledTestCase(ServerTestCase):
             closes_for=lambda symbol: closes.get(symbol, FLAT),
             feed_loader=lambda watchlist, since: feed or SignalFeed([]),
             fx=lambda currency: 1.0,
+            insider_loader=insider_loader or (lambda watchlist, since: []),
         )
 
     def sent(self, text: str) -> list[str]:
@@ -272,6 +278,70 @@ class AlertsTest(ScheduledTestCase):
         self.check({"MSFT": jump}, trade=False, now=NOW + timedelta(minutes=30)).run()
         self.assertEqual(len(self.sent("MSFT up 6.0% today")), 1)
 
+    def test_daily_insider_digest_groups_buys_before_sales_and_runs_once(self):
+        trades = [
+            InsiderTrade("MSFT", "Seller", "director", "sell", 10, 1000, False, False, TODAY, "s1"),
+            InsiderTrade("MSFT", "Planned", "officer", "sell", 10, 2000, True, False, TODAY, "s2"),
+            InsiderTrade("MSFT", "Tax", "insider", "sell", 10, 500, False, True, TODAY, "s3"),
+            InsiderTrade("TSLA", "Single seller", "director", "sell", 2, 400, False, False, TODAY, "s4"),
+            InsiderTrade("AAPL", "Jane Doe", "CEO", "buy", 100, 2_000_000, False, False, TODAY, "b1"),
+            InsiderTrade("AAPL", "Planned Seller", "CFO", "sell", 50, 500_000, True, False, TODAY, "s5"),
+        ]
+
+        def loader(watchlist, since):
+            return trades
+
+        self.check(trade=False, session=CLOSED, insider_loader=loader).run()
+        digests = [i for i, title in enumerate(self.notifier.sent) if "Insider trades:" in title]
+        self.assertEqual(len(digests), 1)
+        body = self.notifier.bodies[digests[0]]
+        self.assertIn("AAPL: BOUGHT $2.0M (Jane Doe, CEO) · SOLD $500k by Planned Seller, CFO (1 pre-planned)", body)
+        self.assertIn("MSFT: SOLD $4k by 3 people (1 pre-planned, 1 tax)", body)
+        self.assertIn("TSLA: SOLD $400 by Single seller, director", body)
+        self.assertLess(body.index("AAPL:"), body.index("MSFT:"))
+
+        self.check(trade=False, session=CLOSED, insider_loader=loader).run()
+        self.assertEqual(len([title for title in self.notifier.sent if "Insider trades:" in title]), 1)
+
+    def test_daily_insider_digest_first_run_shows_today_only_then_only_unseen(self):
+        yesterday = TODAY - timedelta(days=1)
+        old = InsiderTrade("AAPL", "Old", "director", "buy", 1, 100, False, False, yesterday, "old")
+        today = InsiderTrade("AAPL", "Today", "director", "buy", 1, 200, False, False, TODAY, "today")
+        self.check(trade=False, session=CLOSED, insider_loader=lambda watchlist, since: [old, today]).run()
+        first = self.notifier.bodies[self.notifier.sent.index("Insider trades: Wed 30 Sep")]
+        self.assertIn("Today, director", first)
+        self.assertNotIn("Old, director", first)
+
+        tomorrow = TODAY + timedelta(days=1)
+        new = InsiderTrade("MSFT", "New", "officer", "sell", 2, 300, False, False, tomorrow, "new")
+        next_day = NOW + timedelta(days=1)
+        session = Session(next_day - timedelta(hours=8), next_day - timedelta(hours=1))
+        self.check(
+            trade=False,
+            now=next_day,
+            session=session,
+            insider_loader=lambda watchlist, since: [old, today, new],
+        ).run()
+        digest = [body for title, body in zip(self.notifier.sent, self.notifier.bodies) if "Insider trades:" in title][
+            -1
+        ]
+        self.assertIn("MSFT: SOLD $300 by New, officer", digest)
+        self.assertNotIn("AAPL:", digest)
+
+    def test_insider_loader_error_keeps_daily_summary_and_warns_once(self):
+        def fail(watchlist, since):
+            raise RuntimeError("SEC unavailable")
+
+        self.check(trade=False, session=CLOSED, insider_loader=fail).run()
+        self.check(trade=False, session=CLOSED, insider_loader=fail).run()
+        self.assertEqual(len(self.sent("Daily summary")), 1)
+        self.assertEqual(len(self.sent("Couldn't load insider trades")), 1)
+
+    def test_insider_digest_can_be_disabled(self):
+        with mock.patch.object(config, "INSIDER_DAILY_SUMMARY", False):
+            self.check(trade=False, session=CLOSED, insider_loader=lambda watchlist, since: []).run()
+        self.assertEqual(self.sent("Insider trades:"), [])
+
 
 class DiscordNotifierTest(unittest.TestCase):
     def test_batches_and_retries_rate_limit(self):
@@ -305,6 +375,101 @@ class RulesTest(unittest.TestCase):
         self.assertTrue(up.crossed_up and up.trend_up and not up.crossed_down)
         self.assertTrue(down.crossed_down and not down.trend_up)
         self.assertIsNone(SmaSignal.from_closes([1, 2, 3], 2, 3))
+
+
+class NextCheckTest(unittest.TestCase):
+    def setUp(self):
+        self.today = date(2026, 9, 30)
+        self.open = datetime(2026, 9, 30, 13, 30, tzinfo=timezone.utc)
+        self.close = datetime(2026, 9, 30, 20, 0, tzinfo=timezone.utc)
+        self.session = Session(self.open, self.close)
+        self.sessions = {self.today: self.session}
+        self.session_for = lambda day: self.sessions.get(day)
+
+    def test_preopen_and_mid_session(self):
+        self.assertEqual(
+            next_check_at(datetime(2026, 9, 30, 13, 0, tzinfo=timezone.utc), {}, self.session_for),
+            self.open + timedelta(minutes=2),
+        )
+        self.assertEqual(
+            next_check_at(datetime(2026, 9, 30, 15, 0, tzinfo=timezone.utc), {}, self.session_for),
+            datetime(2026, 9, 30, 15, 15, tzinfo=timezone.utc),
+        )
+
+    def test_near_close_and_after_close_summary_pending(self):
+        near_close = datetime(2026, 9, 30, 19, 55, tzinfo=timezone.utc)
+        expected = self.close + SUMMARY_DELAY + timedelta(minutes=1)
+        self.assertEqual(next_check_at(near_close, {}, self.session_for), expected)
+        after_close = datetime(2026, 9, 30, 20, 3, tzinfo=timezone.utc)
+        self.assertEqual(next_check_at(after_close, {}, self.session_for), expected)
+
+    def test_after_close_summary_done_plans_next_session(self):
+        tomorrow = self.today + timedelta(days=1)
+        next_open = datetime(2026, 10, 1, 1, 0, tzinfo=timezone.utc)
+        self.sessions[tomorrow] = Session(next_open, next_open + timedelta(hours=6))
+        now = datetime(2026, 9, 30, 20, 0, tzinfo=timezone.utc)
+        self.sessions[self.today] = Session(self.open, now - timedelta(hours=1))
+        self.assertEqual(
+            next_check_at(now, {"summary_day": self.today.isoformat()}, self.session_for),
+            next_open + timedelta(minutes=2),
+        )
+
+    def test_friday_evening_caps_weekend_sleep(self):
+        friday = date(2026, 10, 2)
+        monday = date(2026, 10, 5)
+        now = datetime(2026, 10, 2, 21, 0, tzinfo=timezone.utc)
+        sessions = {
+            friday: Session(now - timedelta(hours=2), now - timedelta(hours=1)),
+            monday: Session(datetime(2026, 10, 5, 13, 30, tzinfo=timezone.utc), self.close),
+        }
+        planned = next_check_at(now, {"summary_day": friday.isoformat()}, sessions.get)
+        self.assertEqual(planned, now + timedelta(hours=5, minutes=30))
+
+    def test_holiday_finds_next_available_session(self):
+        holiday = self.today
+        next_day = holiday + timedelta(days=1)
+        now = datetime(2026, 9, 30, 13, 0, tzinfo=timezone.utc)
+        next_open = now + timedelta(hours=4)
+        sessions = {next_day: Session(next_open, next_open + timedelta(hours=6))}
+        self.assertEqual(next_check_at(now, {}, sessions.get), next_open + timedelta(minutes=2))
+
+
+class PlanNextTest(unittest.TestCase):
+    def test_plan_flag_writes_output_and_falls_back_without_config_validation(self):
+        import run_scheduled
+
+        with self.subTest("scheduled"):
+            with tempfile.TemporaryDirectory() as directory:
+                state_path = Path(directory) / "state.json"
+                output_path = Path(directory) / "output.txt"
+                state_path.write_text('{"summary_day":"2026-09-30"}')
+                planned = datetime(2026, 9, 30, 20, 6, tzinfo=timezone.utc)
+                stdout = io.StringIO()
+                with (
+                    mock.patch.object(run_scheduled, "STATE_PATH", state_path),
+                    mock.patch.object(run_scheduled, "next_check_at", return_value=planned) as planner,
+                    mock.patch.object(run_scheduled.config, "validate", side_effect=AssertionError),
+                    mock.patch.object(run_scheduled.sys, "argv", ["run_scheduled.py", "--plan-next"]),
+                    mock.patch.dict("os.environ", {"GITHUB_OUTPUT": str(output_path)}),
+                    redirect_stdout(stdout),
+                ):
+                    self.assertEqual(run_scheduled.main(), 0)
+                planner.assert_called_once_with(mock.ANY, {"summary_day": "2026-09-30"})
+                self.assertEqual(stdout.getvalue().strip(), planned.isoformat())
+                self.assertEqual(output_path.read_text(), f"next_check_epoch={int(planned.timestamp())}\n")
+
+        with self.subTest("fallback"):
+            stdout = io.StringIO()
+            before = datetime.now(timezone.utc)
+            with (
+                mock.patch.object(run_scheduled, "next_check_at", side_effect=RuntimeError("calendar error")),
+                mock.patch.object(run_scheduled.sys, "argv", ["run_scheduled.py", "--plan-next"]),
+                mock.patch.dict("os.environ", {}, clear=True),
+                redirect_stdout(stdout),
+            ):
+                self.assertEqual(run_scheduled.main(), 0)
+            fallback = datetime.fromisoformat(stdout.getvalue().strip())
+            self.assertAlmostEqual((fallback - before).total_seconds(), 15 * 60, delta=2)
 
 
 if __name__ == "__main__":
