@@ -9,7 +9,7 @@ import json
 import logging
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -21,7 +21,7 @@ import config
 from dashboard.advice import advise
 from notify.discord import DiscordNotifier
 from signals.feed import SignalFeed, load_signal_feed
-from strategies.rules import Decision, Holding, RiskRules, SmaSignal, sma_decision, smart_money_decision
+from strategies.rules import Decision, PositionState, SmaSignal, sma_decision, smart_money_decision
 from trading212.accounts import AccountProfile
 from trading212.broker import order_side, order_ticker
 from trading212.client import OrderUncertain, Trading212Error, symbol_from_ticker, validate_base_url
@@ -55,6 +55,7 @@ class Account:
     cash: float
     held: dict[str, float]
     bot: dict[str, float]
+    avg_price: dict[str, float] = field(default_factory=dict)
 
 
 def nyse_session(day: date) -> Session | None:
@@ -90,16 +91,6 @@ def _parse_time(raw: str) -> datetime | None:
 def _money(value: float, currency: str) -> str:
     symbol = {"USD": "$", "GBP": "£", "EUR": "€"}.get(currency)
     return f"{symbol}{value:,.2f}" if symbol else f"{value:,.2f} {currency}"
-
-
-def risk_rules() -> RiskRules:
-    return RiskRules(
-        stop_loss_pct=config.STOP_LOSS_PCT,
-        trailing_stop_pct=config.TRAILING_STOP_PCT,
-        take_profit_pct=config.TAKE_PROFIT_PCT,
-        exit_below_short_sma=config.EXIT_BELOW_SHORT_SMA,
-        require_price_above_long_sma=config.REQUIRE_PRICE_ABOVE_LONG_SMA,
-    )
 
 
 def _shares(holdings: dict[str, float]) -> str:
@@ -156,7 +147,7 @@ class ScheduledCheck:
         state = self.state
         for key in ("open_orders", "uncertain", "trades_today"):
             state.setdefault(key, [])
-        for key in ("advice", "errors", "moves", "holdings"):
+        for key in ("advice", "errors", "moves", "positions"):
             state.setdefault(key, {})
         if state.get("day") == self.today.isoformat():
             return
@@ -391,9 +382,11 @@ class ScheduledCheck:
             currency = summary.get("currency") or "USD"
             fx = self.fx(currency)
             held: dict[str, float] = {}
+            avg_price: dict[str, float] = {}
             for row in self.client.positions():
                 symbol = symbol_from_ticker(order_ticker(row))
                 held[symbol] = held.get(symbol, 0.0) + float(row.get("quantity") or 0)
+                avg_price[symbol] = float(row.get("averagePricePaid") or 0)
         except (Trading212Error, OSError, ValueError) as exc:
             self._error_once("Couldn't reach your Trading 212 practice account", str(exc))
             return None
@@ -405,6 +398,7 @@ class ScheduledCheck:
             cash=float((summary.get("cash") or {}).get("availableToTrade") or 0) * fx,
             held=held,
             bot=self.ledger.reconcile(held),
+            avg_price=avg_price,
         )
 
     def _settle_orders(self) -> None:
@@ -462,8 +456,9 @@ class ScheduledCheck:
     def _order_finished(self, entry: dict, status: str, filled: float, price: float) -> None:
         symbol, side = entry["symbol"], entry["side"]
         if filled > 0:
+            before = self.ledger.bot_shares().get(symbol, 0.0)
             if self.ledger.apply_fill(entry["id"], symbol, filled if side == "buy" else -filled):
-                self._fill_holding(symbol, side, filled, price)
+                self._track_fill(symbol, side, before, filled, price)
                 verb = "bought" if side == "buy" else "sold"
                 text = f"{verb} {filled:g} {symbol} at ${price:,.2f}"
                 self.state["trades_today"].append(text)
@@ -477,43 +472,40 @@ class ScheduledCheck:
         else:
             self.notifier.add("danger", f"Trading 212 did not fill the bot's {side.upper()} {symbol} order", status)
 
-    # ------------------------------------------------------------------ entry / peak prices
-    def _fill_holding(self, symbol: str, side: str, filled: float, price: float) -> None:
-        """Keep the bot's average entry price per stock up to date from its own fills."""
-        holdings = self.state["holdings"]
-        now_held = self.ledger.bot_shares().get(symbol, 0.0)
-        if side != "buy":
-            if now_held <= 0:
-                holdings.pop(symbol, None)
+    # ------------------------------------------------------------------ trading
+    def _track_fill(self, symbol: str, side: str, before: float, filled: float, price: float) -> None:
+        """Entry price of the bot's shares (average of its buys); forgotten once they are all sold."""
+        positions = self.state["positions"]
+        if side == "sell":
+            if before - filled <= 1e-9:
+                positions.pop(symbol, None)
             return
         if price <= 0:
             return
-        known = holdings.get(symbol)
-        before = now_held - filled
-        if known and before > 0:
-            entry = (known["entry"] * before + price * filled) / now_held
-            holdings[symbol] = {"entry": entry, "peak": max(known["peak"], price)}
+        old = positions.get(symbol)
+        if old and before > 0:
+            entry = (old["entry"] * before + price * filled) / (before + filled)
+            positions[symbol] = {"entry": entry, "peak": max(old["peak"], price)}
         else:
-            holdings[symbol] = {"entry": price, "peak": price}
+            positions[symbol] = {"entry": price, "peak": price}
 
-    def _track_holdings(self, account: Account, closes: dict[str, Closes]) -> dict[str, Holding]:
-        """Entry (bot's fill price, else first price seen) and peak price for each stock the bot holds."""
-        stored = self.state["holdings"]
-        for symbol in [s for s in stored if account.bot.get(s, 0.0) <= 0]:
-            del stored[symbol]
-        result = {}
-        for symbol, qty in account.bot.items():
-            series = closes.get(symbol)
-            if qty <= 0 or not series:
-                continue
-            price = series[-1][1]
-            known = stored.get(symbol) or {"entry": price, "peak": price}
-            known = {"entry": known["entry"], "peak": max(known["peak"], price)}
-            stored[symbol] = known
-            result[symbol] = Holding(entry_price=known["entry"], peak_price=known["peak"])
-        return result
+    def _position(self, account: Account, symbol: str, price: float) -> PositionState | None:
+        """Entry/peak of the bot's holding, updated with the latest price. Seeded from Trading 212's
+        average price when all shares are the bot's, otherwise from the first price seen."""
+        positions = self.state["positions"]
+        if account.bot.get(symbol, 0.0) <= 0:
+            positions.pop(symbol, None)
+            return None
+        row = positions.get(symbol)
+        if row is None:
+            avg = account.avg_price.get(symbol, 0.0)
+            only_bot = abs(account.held.get(symbol, 0.0) - account.bot[symbol]) < 1e-6
+            entry = avg if avg > 0 and only_bot else price
+            row = {"entry": entry, "peak": entry}
+        state = PositionState(float(row["entry"]), float(row["peak"])).update(price)
+        positions[symbol] = {"entry": state.entry_price, "peak": state.peak_price}
+        return state
 
-    # ------------------------------------------------------------------ trading
     def _halted(self, account: Account) -> bool:
         today = self.today.isoformat()
         if self.state.get("halted_day") == today:
@@ -542,29 +534,22 @@ class ScheduledCheck:
         self,
         symbol: str,
         signal: SmaSignal,
-        held: bool,
+        position: PositionState | None,
         scores: dict,
         feed: SignalFeed | None,
-        holding: Holding | None = None,
     ):
         on_watchlist = symbol in config.WATCHLIST
-        rules = risk_rules()
+        held = position is not None
+        rules = config.trade_rules()
         if config.STRATEGY != "smart_money":
-            return sma_decision(signal, held, on_watchlist, rules=rules, holding=holding)
+            return sma_decision(signal, held, on_watchlist, position, rules)
 
         def who(action: str) -> str:
             reasons = feed.reasons(symbol, self.today, config.SIGNAL_LOOKBACK_DAYS) if feed else []
             return "; ".join(f"{s.trader} {s.detail}" for s in reasons if s.action == action)
 
         return smart_money_decision(
-            signal,
-            held,
-            on_watchlist,
-            scores.get(symbol, 0),
-            config.REQUIRE_SMA_CONFIRMATION,
-            who,
-            rules=rules,
-            holding=holding,
+            signal, held, on_watchlist, scores.get(symbol, 0), config.REQUIRE_SMA_CONFIRMATION, who, position, rules
         )
 
     def _trade(self, account: Account, closes: dict[str, Closes], scores: dict, feed: SignalFeed | None) -> None:
@@ -576,14 +561,14 @@ class ScheduledCheck:
         }
         busy.update({e["symbol"]: e["side"] for e in self.state["open_orders"] + self.state["uncertain"]})
         held = {s for s, q in account.bot.items() if q > 0}
-        holdings = self._track_holdings(account, closes)
         cash = account.cash
         new_positions = 0
         for symbol, series in closes.items():
             signal = SmaSignal.from_closes([c for _, c in series], config.SMA_SHORT_WINDOW, config.SMA_LONG_WINDOW)
             if signal is None:
                 continue
-            decision: Decision | None = self._decide(symbol, signal, symbol in held, scores, feed, holdings.get(symbol))
+            position = self._position(account, symbol, signal.price)
+            decision: Decision | None = self._decide(symbol, signal, position, scores, feed)
             if decision is None:
                 continue
             if symbol in busy:

@@ -20,9 +20,10 @@ This directory is standalone and does not use any of the Solana/crypto code in t
 | `strategies/smart_money.py` | `SmartMoneySma`: SMA crossover + "follow the big traders" signals |
 | `signals/` | Public-disclosure data: SEC 13F, SEC Form 4, congressional trades (Bargo, or Quiver) |
 | `run_backtest.py` | Backtest on Yahoo Finance history and print performance stats |
+| `sweep_backtest.py` | Backtest a grid of settings, rank them by Sharpe, re-check the winner on a later period |
 | `run_live.py` | Run live on your Alpaca **paper** or Trading 212 **practice** account |
 | `trading212/` | Trading 212 practice API client, Lumibot broker, and the ledger of shares the bot bought |
-| `tests/` | Trading 212 (local fake server), login, multi-account, push and bot-restart tests (`python -m unittest discover -s tests -t .`) |
+| `tests/` | Buy/sell rules (stop-loss, trailing stop, take-profit, RSI), Trading 212 (local fake server), login, multi-account, push and bot-restart tests (`python -m unittest discover -s tests -t .`) |
 | `show_signals.py` | Just print what the people you follow recently bought/sold (no trading) |
 | `run_dashboard.py` / `dashboard/` | Browser **command center**: live prices, charts, alerts + pop-ups, paper account, bot controls |
 | `deploy/oracle/install.sh` | One-command install on an Ubuntu cloud server (Oracle Always Free): systemd + Caddy HTTPS |
@@ -75,31 +76,28 @@ Everything lives in `.env` (see `.env.example` for all options):
 - `LIQUIDATE_ON_DAILY_LOSS=true` — additionally sell everything when the daily loss limit is hit
 - `PRICE_ALERT_PCTS` — log an alert when a stock moves this much in a day in percent (default `5,10`)
 
-**When the bot sells.** For every stock the bot holds, these exits are checked first, in this order, on
-every check (live, scheduled and backtest — the rules live in `strategies/rules.py`). Set a percentage
-to `0` to turn that exit off.
+**When to sell (exit rules).** Checked on every stock the bot holds, before the SMA crossover. The
+first one that fires sells the whole position, and the sell message says which rule it was. The bot
+remembers what it paid (the broker's average fill price, or the first price it saw) and the highest
+price since buying. Set a percentage to `0` or `off` to turn that rule off.
 
-- `STOP_LOSS_PCT` (default `0.08`) — sell when the price is 8% or more below the bot's entry price.
-- `TRAILING_STOP_PCT` (default `0.10`) — sell when the price is 10% or more below the highest price
-  seen since the bot bought (locks in gains after a run-up).
-- `TAKE_PROFIT_PCT` (default `0.20`) — sell when the price is 20% or more above the entry price.
-- `EXIT_BELOW_SHORT_SMA` (default `true`) — sell as soon as the price closes/trades below the short
-  (20-day) SMA, instead of waiting for the slower 20/50 cross-down. While on, the bot also doesn't buy
-  a stock that is below its short SMA (it would sell it again on the next check).
+| Setting | Default | Sells when... | Example (bought at $100) |
+| --- | --- | --- | --- |
+| `STOP_LOSS_PCT` | `0.08` | price falls this far below what the bot paid | sells at $92 or less |
+| `TRAILING_STOP_PCT` | `0.10` | price falls this far below the highest price since buying | went up to $130, sells at $117 |
+| `TAKE_PROFIT_PCT` | `0.20` | price rises this far above what the bot paid | sells at $120 or more |
+| `EXIT_BELOW_SHORT_SMA` | `true` | price closes below the short SMA (e.g. the 20-day average) | |
 
-After those, the old sells still apply: the 20/50 SMA cross-down and (smart money) followed traders
-being net sellers. Example: bought at $100 → sells at $92 (stop-loss), at $120 (take-profit), or, if it
-first rose to $115, at $103.50 (trailing stop).
+The SMA bearish crossover (and, in `smart_money`, followed traders selling) still sells too.
 
-*Entry price* is the broker's average fill price for the position when it reports one (Alpaca), else
-the price of the bot's own buy fills, else the first price the bot saw after it noticed the position
-(e.g. after a restart). Peak price is the highest price seen on a check since then. Both are kept in
-memory for the live bot (so a restart starts them again from the current price), and in
-`.cache/scheduled/state.json` for the GitHub Actions bot.
+**When to buy (entry filters).** Extra checks before any buy:
 
-**Optional buy filter.** `REQUIRE_PRICE_ABOVE_LONG_SMA=true` (default `false`) — only buy while the
-price is above the long (50-day) SMA, so the bot skips buy signals in a stock that is still in a
-longer downtrend.
+- `REQUIRE_PRICE_ABOVE_LONG_SMA=true` — only buy when the price is above the long SMA (default `false`)
+- `RSI_MAX_FOR_ENTRY` — skip buys when RSI(14) is above this, e.g. `70` = "don't buy when overbought"
+  (blank = off, the default). RSI is a 0-100 score of how strongly the price rose over the last 14 days.
+
+The scheduled GitHub/Discord bot (section 8) uses exactly the same rules; set these as repository
+variables there.
 
 ### Following the big traders (`STRATEGY=smart_money`)
 
@@ -118,8 +116,7 @@ How it trades:
 
 - Each signal counts +1 (bought / added / new position) or −1 (sold / cut / exited) for that ticker, for
   `SIGNAL_LOOKBACK_DAYS` after it was **disclosed**.
-- **Net sellers** on a stock you hold → the bot sells it (the stop-loss / trailing-stop / take-profit /
-  short-SMA exits from [Risk controls](#risk-controls) apply too).
+- **Net sellers** on a stock you hold → the bot sells it.
 - **Net buyers** → the bot buys it, as long as the SMA trend agrees (`REQUIRE_SMA_CONFIRMATION=true`).
 - With `FOLLOW_EXPANDS_WATCHLIST=true`, stocks the big names are buying get added to your watchlist.
 - Otherwise the normal SMA crossover rules apply.
@@ -155,6 +152,56 @@ python run_backtest.py --tearsheet                      # also save/open the HTM
 Uses Lumibot's `YahooDataBacktesting` (free, no keys needed) and prints total return, CAGR, volatility,
 Sharpe, and max drawdown vs. SPY. Trade logs and stats are written to `logs/`.
 
+### Find the best settings (parameter sweep)
+
+```bash
+python sweep_backtest.py --top 5                     # 648 settings on BACKTEST_START..BACKTEST_END
+python sweep_backtest.py --start 2022-01-01 --end 2024-12-31 --validate-start 2025-01-01 --validate-end 2025-12-31
+python sweep_backtest.py --short-windows 10,20 --long-windows 50 --take-profits 0.2,none   # smaller grid
+python sweep_backtest.py --strategy smart_money --workers 2   # slower: also fetches SEC filings
+```
+
+It backtests every combination of `--short-windows` (10,15,20), `--long-windows` (30,50,100),
+`--stop-losses` (0.05,0.08,0.12), `--trailing-stops` (0.08,0.10,0.15), `--take-profits`
+(0.15,0.20,0.30,none) and `--exit-below-short-sma` (true,false) quietly in parallel (`--workers`),
+prints the best `--top N` sorted by Sharpe (ties: return / max drawdown), and saves every run to
+`logs/sweep_<strategy>_<start>_<end>.csv`. Other settings (watchlist, position size, RSI filter...)
+come from `.env`.
+
+It then re-runs the winner and your current settings on a **held-out** period it never saw (default:
+the year after `--end`, up to today) and prints them side by side. If the winner is great on the sweep
+period but poor on the held-out period, it was fitted to the past (overfitting) and is unlikely to
+keep working.
+
+#### Sweep results (2024-01-01 → 2025-12-31, held-out 2026-01-01 → 2026-11-06)
+
+Default watchlist and position size, all 648 settings, ranked by Sharpe ratio (tiebreak RoMaD =
+return ÷ max drawdown):
+
+| # | short | long | stop-loss | trailing | take-profit | exit below short SMA | total return | Sharpe | max drawdown | RoMaD |
+|---:|---:|---:|---:|---:|---:|:---:|---:|---:|---:|---:|
+| 1 | 20 | 50 | 8% | 10% | 20% | no | 31.9% | 1.79 | 4.2% | 3.51 |
+| 2 | 20 | 50 | 12% | 10% | 20% | no | 31.9% | 1.79 | 4.2% | 3.51 |
+| 3 | 20 | 50 | 8% | 8% | 20% | no | 28.6% | 1.71 | 3.5% | 3.87 |
+| 4 | 20 | 50 | 12% | 8% | 20% | no | 28.6% | 1.71 | 3.5% | 3.87 |
+| 5 | 20 | 50 | 5% | 10% | 20% | no | 28.1% | 1.68 | 4.4% | 3.01 |
+
+For comparison, the old bot (SMA cross only, no stops) made 33.9% with Sharpe 1.01 and a 15.2% max
+drawdown on the same period: similar return with about a quarter of the drawdown.
+
+Held-out check (2026 so far): the winner made **-2.5%** (Sharpe -1.11, max drawdown 6.6%); the
+defaults (same but `EXIT_BELOW_SHORT_SMA=true`) made **-1.0%** (Sharpe -1.46, max drawdown 3.3%).
+Neither edge carried over, so the defaults are kept. To try the sweep winner, set in `.env`:
+
+```
+SMA_SHORT_WINDOW=20
+SMA_LONG_WINDOW=50
+STOP_LOSS_PCT=0.08
+TRAILING_STOP_PCT=0.10
+TAKE_PROFIT_PCT=0.20
+EXIT_BELOW_SHORT_SMA=false
+```
+
 In `smart_money` backtests a signal is only used once its public **disclosure date** has passed, so there
 is no look-ahead. 13F data goes back years (all quarters since the backtest start); Form 4 data is fetched for the last
 ~150 filings per person.
@@ -183,8 +230,8 @@ of each one, and still let you trade yourself.
 How it works:
 
 - **Same strategy and risk limits** as on Alpaca (SMA / smart money, 10% per stock, max positions,
-  stop-loss / trailing stop / take-profit exits, daily-loss limit, skip a stock that already has an
-  open order). Prices and charts still come from Yahoo, because Trading 212's API has no live price feed.
+  daily-loss limit, skip a stock that already has an open order). Prices and charts still come from
+  Yahoo, because Trading 212's API has no live price feed.
 - **Your trades vs. the bot's:** Trading 212 only reports one combined position per stock, so the bot
   records every order it places in `.cache/trading212/bot_ledger.json` and counts its own filled
   shares. The strategy only sees those shares, and a bot sell is capped at them, so it never sells
