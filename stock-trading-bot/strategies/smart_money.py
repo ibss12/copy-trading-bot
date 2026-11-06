@@ -12,7 +12,8 @@ class SmartMoneySma(SmaCrossover):
 
     * Buy when people you follow are net buyers of a stock (optionally only if the SMA trend
       agrees), or on a plain SMA bullish cross of a watchlist stock nobody is selling.
-    * Sell a holding on an SMA bearish cross or when people you follow are net sellers.
+    * Sell a holding on the exit stack (stop-loss, trailing stop, take-profit, below short SMA),
+      an SMA bearish cross, or when people you follow are net sellers.
     """
 
     parameters = {
@@ -51,13 +52,16 @@ class SmartMoneySma(SmaCrossover):
         return list(dict.fromkeys(symbols))
 
     def decide(self, symbol: str, signal: SmaSignal) -> None:
+        position = self.position_state(symbol, signal.price)
         decision = smart_money_decision(
             signal,
-            held=self.held_quantity(symbol) > 0,
+            held=position is not None,
             on_watchlist=symbol in self.symbols,
             score=self.scores.get(symbol, 0),
             require_sma_confirmation=bool(self.parameters["require_sma_confirmation"]),
             who=lambda action: self._who(symbol, action),
+            position=position,
+            rules=self.rules,
         )
         self.act(symbol, signal, decision)
 

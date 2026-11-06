@@ -124,6 +124,32 @@ class TradingTest(ScheduledTestCase):
         self.assertEqual([p["quantity"] for p in self.fake.posts], [-3])
         self.assertTrue(self.sent("Bot SELLING 3 AAPL"))
 
+    def test_stop_loss_from_the_bots_fill_price(self):
+        self.check({"AAPL": GOLDEN}).run()
+        self.fake.fill(self.fake.pending[0]["id"], price=12.0)
+        drop = series(10, 10, 10, 9, 12, 10.5)
+        self.check({"AAPL": drop}, now=NOW + timedelta(minutes=30)).run()
+        self.assertEqual([p["quantity"] for p in self.fake.posts], [83, -83])
+        self.assertTrue(any("Why: stop-loss" in b and "entry 12.00" in b for b in self.notifier.bodies))
+
+    def test_trailing_stop_remembers_the_peak_between_runs(self):
+        self.fake.positions["AAPL_US_EQ"] = 3
+        self.bot_ledger.apply_fill("old", "AAPL", 3)
+        with mock.patch.object(config, "TAKE_PROFIT_PCT", None):
+            self.check({"AAPL": series(90, 95, 100, 105, 120)}).run()
+            self.assertEqual(self.fake.posts, [], "entry seeded from Trading 212's average price (100)")
+            self.check({"AAPL": series(95, 100, 105, 120, 107)}, now=NOW + timedelta(minutes=30)).run()
+        self.assertEqual([p["quantity"] for p in self.fake.posts], [-3])
+        self.assertTrue(any("Why: trailing stop" in b and "peak 120.00" in b for b in self.notifier.bodies))
+
+    def test_rsi_filter_blocks_buy(self):
+        hot = series(*[10 + i for i in range(20)], 22, 40)  # crosses up with RSI(14) ~82
+        with mock.patch.object(config, "RSI_MAX_FOR_ENTRY", 70.0):
+            self.check({"AAPL": hot}).run()
+        self.assertEqual(self.fake.posts, [])
+        self.check({"AAPL": hot}, now=NOW + timedelta(minutes=30)).run()
+        self.assertEqual(len(self.fake.posts), 1)
+
     def test_uncertain_order_is_never_resent_and_found_later(self):
         self.fake.post_status = 500
         self.fake.place_on_error = True

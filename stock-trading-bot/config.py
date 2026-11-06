@@ -34,6 +34,16 @@ def _bool(name: str, default: bool) -> bool:
     return raw in ("1", "true", "yes", "y", "on")
 
 
+def _optional_float(name: str, default: float | None) -> float | None:
+    """Blank -> default; "0", "none" or "off" -> None (rule disabled)."""
+    raw = _str(name).lower()
+    if not raw:
+        return default
+    if raw in ("none", "off", "false", "no"):
+        return None
+    return float(raw) or None
+
+
 def _list(name: str, default: str) -> list[str]:
     return [item.strip() for item in _str(name, default).split(",") if item.strip()]
 
@@ -110,6 +120,15 @@ MAX_DAILY_LOSS_PCT = _float("MAX_DAILY_LOSS_PCT", 0.03)
 LIQUIDATE_ON_DAILY_LOSS = _bool("LIQUIDATE_ON_DAILY_LOSS", False)
 PRICE_ALERT_PCTS = [float(pct) for pct in _list("PRICE_ALERT_PCTS", "5,10")]
 
+# Exit stack, checked before the SMA cross on every holding (set a pct to 0/off to disable).
+STOP_LOSS_PCT = _optional_float("STOP_LOSS_PCT", 0.08)
+TRAILING_STOP_PCT = _optional_float("TRAILING_STOP_PCT", 0.10)
+TAKE_PROFIT_PCT = _optional_float("TAKE_PROFIT_PCT", 0.20)
+EXIT_BELOW_SHORT_SMA = _bool("EXIT_BELOW_SHORT_SMA", True)
+# Entry filters: only buy above the long SMA / when RSI(14) is at most this (blank = no RSI filter).
+REQUIRE_PRICE_ABOVE_LONG_SMA = _bool("REQUIRE_PRICE_ABOVE_LONG_SMA", False)
+RSI_MAX_FOR_ENTRY = _optional_float("RSI_MAX_FOR_ENTRY", None)
+
 # --- Smart money -------------------------------------------------------------
 FOLLOW_FUNDS = _filers(
     "FOLLOW_FUNDS",
@@ -157,10 +176,23 @@ def strategy_parameters() -> dict:
         "max_daily_loss_pct": MAX_DAILY_LOSS_PCT,
         "liquidate_on_daily_loss": LIQUIDATE_ON_DAILY_LOSS,
         "price_alert_pcts": PRICE_ALERT_PCTS,
+        "stop_loss_pct": STOP_LOSS_PCT,
+        "trailing_stop_pct": TRAILING_STOP_PCT,
+        "take_profit_pct": TAKE_PROFIT_PCT,
+        "exit_below_short_sma": EXIT_BELOW_SHORT_SMA,
+        "require_price_above_long_sma": REQUIRE_PRICE_ABOVE_LONG_SMA,
+        "rsi_max_for_entry": RSI_MAX_FOR_ENTRY,
         "signal_lookback_days": SIGNAL_LOOKBACK_DAYS,
         "follow_expands_watchlist": FOLLOW_EXPANDS_WATCHLIST,
         "require_sma_confirmation": REQUIRE_SMA_CONFIRMATION,
     }
+
+
+def trade_rules():
+    """The exit stack / entry filters as `strategies.rules.TradeRules` (used by the scheduled check)."""
+    from strategies.rules import TradeRules
+
+    return TradeRules.from_parameters(strategy_parameters())
 
 
 def validate() -> None:
@@ -170,6 +202,14 @@ def validate() -> None:
         raise ValueError("MAX_POSITION_PCT must be in (0, 1]")
     if not 0 <= MAX_DAILY_LOSS_PCT < 1:
         raise ValueError("MAX_DAILY_LOSS_PCT must be in [0, 1)")
+    for name in ("STOP_LOSS_PCT", "TRAILING_STOP_PCT"):
+        value = globals()[name]
+        if value is not None and not 0 < value < 1:
+            raise ValueError(f"{name} must be in (0, 1), or 0/off to disable")
+    if TAKE_PROFIT_PCT is not None and TAKE_PROFIT_PCT <= 0:
+        raise ValueError("TAKE_PROFIT_PCT must be positive, or 0/off to disable")
+    if RSI_MAX_FOR_ENTRY is not None and not 0 < RSI_MAX_FOR_ENTRY <= 100:
+        raise ValueError("RSI_MAX_FOR_ENTRY must be in (0, 100], or blank to disable")
     if MAX_OPEN_POSITIONS <= 0:
         raise ValueError("MAX_OPEN_POSITIONS must be positive")
     if STRATEGY not in ("sma", "smart_money"):
