@@ -19,8 +19,9 @@ import yfinance as yf
 
 import config
 from dashboard.advice import advise
-from notify.discord import DiscordNotifier
-from signals.feed import SignalFeed, load_signal_feed
+from notify.discord import MAX_DESCRIPTION, DiscordNotifier
+from signals.feed import SignalFeed, load_insider_activity, load_signal_feed
+from signals.models import InsiderTrade
 from strategies.rules import Decision, PositionState, SmaSignal, sma_decision, smart_money_decision
 from trading212.accounts import AccountProfile
 from trading212.broker import order_side, order_ticker
@@ -33,6 +34,7 @@ STATE_PATH = config.CACHE_DIR / "scheduled" / "state.json"
 UNCERTAIN_TIMEOUT = timedelta(minutes=45)
 STALE_ORDER_AGE = timedelta(days=3)
 SUMMARY_DELAY = timedelta(minutes=5)
+MAX_CHAIN_SLEEP = timedelta(hours=5, minutes=30)
 INACTIVE_WARNING_DAYS = 50
 GITHUB_INACTIVE_LIMIT_DAYS = 60
 MAX_FILING_NOTICES = 8
@@ -64,6 +66,49 @@ def nyse_session(day: date) -> Session | None:
         return None
     row = schedule.iloc[0]
     return Session(row["market_open"].to_pydatetime(), row["market_close"].to_pydatetime())
+
+
+def next_check_at(
+    now: datetime,
+    state: dict,
+    session_for: Callable[[date], Session | None] = nyse_session,
+) -> datetime:
+    """Plan the next chained workflow run, returning an aware UTC datetime."""
+    now_utc = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    today = now_utc.astimezone(NEW_YORK).date()
+    session = session_for(today)
+    summary_pending = state.get("summary_day") != today.isoformat()
+
+    def utc(value: datetime) -> datetime:
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    if session:
+        market_open, market_close = utc(session.open), utc(session.close)
+        if now_utc < market_open:
+            candidate = market_open + timedelta(minutes=2)
+        elif now_utc < market_close:
+            candidate = now_utc + timedelta(minutes=15)
+            if candidate >= market_close and summary_pending:
+                candidate = market_close + SUMMARY_DELAY + timedelta(minutes=1)
+        elif summary_pending:
+            after_summary = market_close + SUMMARY_DELAY
+            candidate = (
+                after_summary + timedelta(minutes=1) if now_utc < after_summary else now_utc + timedelta(minutes=15)
+            )
+        else:
+            candidate = None
+    else:
+        candidate = None
+
+    if candidate is None:
+        candidate = now_utc + timedelta(minutes=15)
+        for days_ahead in range(1, 11):
+            next_session = session_for(today + timedelta(days=days_ahead))
+            if next_session:
+                candidate = utc(next_session.open) + timedelta(minutes=2)
+                break
+
+    return max(now_utc + timedelta(minutes=1), min(candidate, now_utc + MAX_CHAIN_SLEEP))
 
 
 def yahoo_closes(symbol: str) -> Closes:
@@ -98,6 +143,15 @@ def _shares(holdings: dict[str, float]) -> str:
     return ", ".join(rows) if rows else "none"
 
 
+def _usd_short(value: float) -> str:
+    value = abs(value)
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.1f}M"
+    if value >= 1_000:
+        return f"${value / 1_000:,.0f}k"
+    return f"${value:,.0f}"
+
+
 class ScheduledCheck:
     def __init__(
         self,
@@ -110,6 +164,7 @@ class ScheduledCheck:
         feed_loader: Callable[[list[str], date], SignalFeed] = load_signal_feed,
         fx: Callable[[str], float] = usd_rate,
         repo_pushed_at: str = "",
+        insider_loader: Callable[[list[str], date], list[InsiderTrade]] = load_insider_activity,
     ):
         self.notifier = notifier
         self.profile = profile
@@ -121,6 +176,7 @@ class ScheduledCheck:
         self.feed_loader = feed_loader
         self.fx = fx
         self.repo_pushed_at = repo_pushed_at
+        self.insider_loader = insider_loader
         self.client = None
         self.ledger = None
         if profile is not None:
@@ -224,6 +280,8 @@ class ScheduledCheck:
                 self._trade(account, closes, scores, feed)
         elif after_close:
             self._summary(account, advice)
+            if config.INSIDER_DAILY_SUMMARY:
+                self._insider_digest()
 
     # ------------------------------------------------------------------ messages
     def _welcome(self) -> None:
@@ -359,6 +417,86 @@ class ScheduledCheck:
             lines.append(warning)
         weekday = self.now.astimezone(NEW_YORK).strftime("%a %d %b")
         self.notifier.add("info", f"Daily summary: {weekday}", "\n".join(lines) or "Nothing to report.")
+
+    def _insider_digest(self) -> None:
+        try:
+            trades = self.insider_loader(list(config.WATCHLIST), self.today - timedelta(days=7))
+        except Exception as exc:
+            self._error_once("Couldn't load insider trades", str(exc))
+            return
+
+        seen = self.state.get("insider_digest_seen")
+        first_run = not isinstance(seen, dict)
+        if first_run:
+            seen = {}
+        if first_run:
+            fresh = [trade for trade in trades if trade.filed_on == self.today]
+        else:
+            fresh = [trade for trade in trades if f"{trade.accession}:{trade.action}" not in seen]
+        for trade in trades:
+            seen[f"{trade.accession}:{trade.action}"] = trade.filed_on.isoformat()
+        keep_after = (self.today - timedelta(days=14)).isoformat()
+        self.state["insider_digest_seen"] = {key: filed_on for key, filed_on in seen.items() if filed_on >= keep_after}
+
+        weekday = self.now.astimezone(NEW_YORK).strftime("%a %d %b")
+        legend = (
+            "Pre-planned = scheduled months ahead (10b5-1), usually less meaningful. "
+            "Tax = shares sold to pay tax on vested stock."
+        )
+        if not fresh:
+            body = "No insider buying or selling filed today on your stocks.\n" + legend
+            self.notifier.add("info", f"Insider trades: {weekday}", body)
+            return
+
+        by_symbol: dict[str, list[InsiderTrade]] = {}
+        for trade in fresh:
+            by_symbol.setdefault(trade.symbol, []).append(trade)
+        symbols = sorted(
+            by_symbol,
+            key=lambda symbol: (
+                not any(trade.action == "buy" for trade in by_symbol[symbol]),
+                -sum(trade.usd for trade in by_symbol[symbol]),
+            ),
+        )
+        stock_lines = []
+        for symbol in symbols:
+            activity = by_symbol[symbol]
+            buys = [trade for trade in activity if trade.action == "buy"]
+            sells = [trade for trade in activity if trade.action == "sell"]
+            parts = []
+            if buys:
+                buyers = list(dict.fromkeys((trade.name or "Unknown insider", trade.role) for trade in buys))
+                who = ", ".join(f"{name}, {role}" for name, role in buyers[:2])
+                if len(buyers) > 2:
+                    who += f", +{len(buyers) - 2} more"
+                parts.append(f"BOUGHT {_usd_short(sum(trade.usd for trade in buys))} ({who})")
+            if sells:
+                sellers = list(dict.fromkeys((trade.name or "Unknown insider", trade.role) for trade in sells))
+                if len(sellers) == 1:
+                    who = f"{sellers[0][0]}, {sellers[0][1]}"
+                else:
+                    who = f"{len(sellers)} people"
+                counts = []
+                planned = sum(trade.planned for trade in sells)
+                tax = sum(trade.tax for trade in sells)
+                if planned:
+                    counts.append(f"{planned} pre-planned")
+                if tax:
+                    counts.append(f"{tax} tax")
+                qualifier = f" ({', '.join(counts)})" if counts else ""
+                parts.append(f"SOLD {_usd_short(sum(trade.usd for trade in sells))} by {who}{qualifier}")
+            stock_lines.append(f"{symbol}: " + " · ".join(parts))
+
+        def render(n):
+            shown = stock_lines[:n]
+            extra = len(stock_lines) - n
+            return "\n".join([*shown, *([f"...and {extra} more stocks"] if extra else []), legend])
+
+        n = min(25, len(stock_lines))
+        while n > 0 and len(render(n)) > MAX_DESCRIPTION:
+            n -= 1
+        body = render(n)
+        self.notifier.add("info", f"Insider trades: {weekday}", body)
 
     def _inactivity_warning(self) -> str:
         pushed = _parse_time(self.repo_pushed_at)

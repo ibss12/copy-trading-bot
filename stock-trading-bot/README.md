@@ -28,7 +28,7 @@ This directory is standalone and does not use any of the Solana/crypto code in t
 | `run_dashboard.py` / `dashboard/` | Browser **command center**: live prices, charts, alerts + pop-ups, paper account, bot controls |
 | `deploy/oracle/install.sh` | One-command install on an Ubuntu cloud server (Oracle Always Free): systemd + Caddy HTTPS |
 | `run_scheduled.py` / `scheduled/` / `notify/` | One bot check that trades the practice account and sends Discord messages, then exits (free GitHub schedule, section 8) |
-| `../.github/workflows/stock-bot.yml` | Runs `run_scheduled.py` on GitHub every 15 minutes on US market days |
+| `../.github/workflows/stock-bot.yml` | Chains `run_scheduled.py` checks about every 15 minutes during market hours |
 
 ## 1. Setup
 
@@ -68,7 +68,7 @@ Everything lives in `.env` (see `.env.example` for all options):
 
 ### Risk controls
 
-- `MAX_POSITION_PCT` — max fraction of the portfolio in any one stock (default `0.10` = 10%)
+- `MAX_POSITION_PCT` — max fraction of the portfolio in any one stock (default `0.125` = 12.5%)
 - `MAX_OPEN_POSITIONS` — max number of stocks held at once
 - `MAX_DAILY_LOSS_PCT` — if the portfolio drops this much from the previous close, the bot stops buying
   for the rest of the session; a loss seen at the close blocks buying for the next session (set `0` to
@@ -83,9 +83,9 @@ price since buying. Set a percentage to `0` or `off` to turn that rule off.
 
 | Setting | Default | Sells when... | Example (bought at $100) |
 | --- | --- | --- | --- |
-| `STOP_LOSS_PCT` | `0.08` | price falls this far below what the bot paid | sells at $92 or less |
-| `TRAILING_STOP_PCT` | `0.10` | price falls this far below the highest price since buying | went up to $130, sells at $117 |
-| `TAKE_PROFIT_PCT` | `0.20` | price rises this far above what the bot paid | sells at $120 or more |
+| `STOP_LOSS_PCT` | `0.10` | price falls this far below what the bot paid | sells at $90 or less |
+| `TRAILING_STOP_PCT` | `0.12` | price falls this far below the highest price since buying | went up to $130, sells at $114.40 |
+| `TAKE_PROFIT_PCT` | `0.30` | price rises this far above what the bot paid | sells at $130 or more |
 | `EXIT_BELOW_SHORT_SMA` | `true` | price closes below the short SMA (e.g. the 20-day average) | |
 
 The SMA bearish crossover (and, in `smart_money`, followed traders selling) still sells too.
@@ -110,6 +110,7 @@ not non-public insider information; it tells you what they already did, after th
 | Named insiders (Donald J. Trump, Donald Trump Jr.) | SEC Form 4 (free) | 2 business days | `FOLLOW_INSIDERS` |
 | CEOs of stocks on your watchlist buying/selling their own shares | SEC Form 4 (free) | 2 business days | `TRACK_CEO_TRADES`, `CEO_TITLES` |
 | Other top executives (CFO, COO, president, chair) of watchlist companies: any buy, sales over $500k (message only, never traded on) | SEC Form 4 (free) | 2 business days | `NOTIFY_OTHER_INSIDERS`, `INSIDER_ALERT_TITLES`, `INSIDER_ALERT_MIN_SELL_USD` |
+| One daily summary of all watchlist insiders' open-market buys and sells (including planned and tax-withholding sales, labelled) | SEC Form 4 (free) | 2 business days | `INSIDER_DAILY_SUMMARY` |
 | Nancy Pelosi and other members of Congress | STOCK Act disclosures via [Bargo](https://www.bargo.ai/free-apis/congress) (free, last 3 months; no key needed, or a free `BARGO_API_KEY` for 10x the daily limit when following several politicians), or [Quiver Quantitative](https://www.quiverquant.com/) if `QUIVER_API_KEY` is set (paid) | up to 45 days | `FOLLOW_POLITICIANS`, `BARGO_API_KEY`, `QUIVER_API_KEY` |
 
 How it trades:
@@ -396,12 +397,16 @@ What the script sets up, and how to look after it:
 GitHub runs the bot for you, for free (public repo), about every 15 minutes while the US market is
 open. Each run checks your stocks, trades your Trading 212 **practice** account with the same rules
 and limits as above, and sends what happened to a **Discord** channel, so your phones get notified
-with everything closed. There's no live dashboard in this mode; you can still trade yourself in the
-Trading 212 app and the bot only sells shares it bought.
+with everything closed. The workflow chains runs itself and sleeps between checks; a cron schedule
+is kept as a backup to restart the chain if it stops. There's no live dashboard in this mode; you
+can still trade yourself in the Trading 212 app and the bot only sells shares it bought.
 
 You get messages for: bot buys and sells (with the reason), fills, cancelled or refused orders,
-stocks turning BUY or SELL, new big-trader filings, big daily price moves (`PRICE_ALERT_PCTS`), the
-daily loss limit, problems such as a wrong key (once a day), and a summary after the close.
+stocks turning BUY or SELL, new big-trader filings, one daily insider buying/selling summary
+(`INSIDER_DAILY_SUMMARY=true` by default), big daily price moves (`PRICE_ALERT_PCTS`), the daily
+loss limit, problems such as a wrong key (once a day), and a summary after the close. The insider
+digest includes open-market Form 4 buys and sells by anyone at watchlist companies; 10b5-1 planned
+sales and tax-withholding sales are included but labelled.
 
 **1. Make a Discord channel link (webhook).** In the Discord app (a computer or phone browser is
 easiest): create a server for yourself (**+** &rarr; *Create My Own*) or use one you own. Next to a
@@ -431,13 +436,14 @@ Secrets are hidden, even though the repo is public. To change settings such as `
 
 **4. Start it.** Open https://github.com/ibss12/copy-trading-bot/actions &rarr; if asked, click
 *I understand my workflows, go ahead and enable them* &rarr; **Stock bot (practice + Discord)** &rarr;
-**Run workflow**. Within a few minutes Discord should show "Stock bot is connected". After that it
-runs by itself; you don't need to keep anything open.
+**Run workflow**. The manual run starts the chain; the cron can also start it if it ever stops.
+Within a few minutes Discord should show "Stock bot is connected". After that it runs by itself;
+you don't need to keep anything open. The Actions tab will show one long-running **next** job sleeping
+between checks; that's normal.
 
 Good to know:
-- **Timing:** runs are scheduled at :07 and :37 past each hour on weekdays. GitHub can start them a few
-  minutes late on busy days, and the bot checks the real NYSE calendar, so weekends and holidays are
-  skipped.
+- **Timing:** while the market is open the chain checks about every 15 minutes. It uses the real NYSE
+  calendar, so weekends and holidays are skipped; the cron is only a backup, not the main cadence.
 - **Stopping it:** Actions &rarr; *Stock bot (practice + Discord)* &rarr; **&middot;&middot;&middot;**
   &rarr; **Disable workflow** (turn it back on the same way). Deleting the Trading 212 secrets keeps
   the messages but stops all trading.

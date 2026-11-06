@@ -31,3 +31,17 @@ class TraderSignal:
             f"{self.trader} {self.action.upper()} {self.symbol} "
             f"({self.source}; {traded}disclosed {self.disclosed_on}) - {self.detail}"
         )
+
+
+@dataclass(frozen=True)
+class InsiderTrade:
+    symbol: str
+    name: str
+    role: str
+    action: Action
+    shares: float
+    usd: float
+    planned: bool
+    tax: bool
+    filed_on: date
+    accession: str

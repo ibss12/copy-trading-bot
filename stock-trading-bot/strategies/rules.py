@@ -80,9 +80,9 @@ class PositionState:
 class TradeRules:
     """Exit stack and entry filters. A pct of None (or 0) turns that rule off."""
 
-    stop_loss_pct: float | None = 0.08
-    trailing_stop_pct: float | None = 0.10
-    take_profit_pct: float | None = 0.20
+    stop_loss_pct: float | None = 0.10
+    trailing_stop_pct: float | None = 0.12
+    take_profit_pct: float | None = 0.30
     exit_below_short_sma: bool = True
     require_price_above_long_sma: bool = False
     rsi_max_for_entry: float | None = None

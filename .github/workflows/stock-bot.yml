@@ -1,5 +1,5 @@
-# Free always-on stock bot: every 15 minutes on US market days GitHub runs one bot check,
-# which trades the Trading 212 PRACTICE account and sends Discord messages.
+# Runs chain themselves every ~15 minutes during market hours, sleeping between checks (free on
+# public repos). The cron is a backup that restarts the chain if it ever dies.
 # Setup: stock-trading-bot/README.md, section "Free: GitHub + Discord".
 name: Stock bot (practice + Discord)
 
@@ -10,18 +10,21 @@ on:
     - cron: "7,22,37,52 13-21 * * 1-5"
   workflow_dispatch:
 
-# One check at a time, so two runs can never place the same order.
+# One chain at a time; its sleeping job holds this group until it dispatches the next check.
 concurrency:
   group: stock-bot
   cancel-in-progress: false
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      next_check_epoch: ${{ steps.plan.outputs.next_check_epoch }}
     defaults:
       run:
         working-directory: stock-trading-bot
@@ -73,3 +76,31 @@ jobs:
         with:
           path: stock-trading-bot/.cache
           key: stockbot-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Plan next check
+        id: plan
+        if: always()
+        run: .venv/bin/python run_scheduled.py --plan-next
+
+  next:
+    needs: check
+    if: always() && needs.check.outputs.next_check_epoch != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait until the next check
+        run: |
+          # Keep the workflow active between scheduled checks; public repositories are free.
+          wait=$(( ${{ needs.check.outputs.next_check_epoch }} - $(date +%s) ))
+          [ "$wait" -gt 0 ] && sleep "$wait"
+
+      - name: Dispatch next check unless another is queued
+        run: |
+          queued=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow stock-bot.yml --json status,databaseId --jq '[.[] | select(.status=="queued" or .status=="waiting" or .status=="pending") | select(.databaseId != '"$GITHUB_RUN_ID"')] | length')
+          if [ "$queued" -gt 0 ]; then
+            echo "Another stock-bot run is already queued; stopping this chain."
+            exit 0
+          fi
+          gh workflow run stock-bot.yml --repo "$GITHUB_REPOSITORY" --ref "${{ github.event.repository.default_branch }}"
