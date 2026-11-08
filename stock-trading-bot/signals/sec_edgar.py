@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 
 from signals.http import CachedHttp
-from signals.models import TraderSignal
+from signals.models import InsiderTrade, TraderSignal
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +211,65 @@ class SecEdgarClient:
             if signal:
                 signals.append(signal)
         return signals
+
+    def form4_activity(self, cik: int, since: date, max_filings: int) -> list[InsiderTrade]:
+        """All open-market buys and sells disclosed in issuer Form 4 filings."""
+        trades = []
+        for filing in self.filings(cik, {"4"}, since, max_filings):
+            document = filing.primary_document.rsplit("/", 1)[-1]
+            try:
+                xml_text = self.http.get_text(f"{filing.folder_url}/{document}")
+                root = ET.fromstring(xml_text)
+            except Exception as exc:  # malformed/legacy filings shouldn't stop the digest
+                logger.debug("Skipping Form 4 %s: %s", filing.accession, exc)
+                continue
+
+            symbol = _text(root, "issuerTradingSymbol").upper()
+            if not symbol or symbol == "NONE":
+                continue
+            owners = [owner for owner in root.iter() if _local(owner.tag) == "reportingOwner"]
+            titles = [_text(owner, "officerTitle") for owner in owners]
+            role = ", ".join(title for title in titles if title)
+            if not role:
+                if _is_director(owners):
+                    role = "director"
+                elif any(_text(owner, "isTenPercentOwner").lower() in ("1", "true") for owner in owners):
+                    role = "10% owner"
+                else:
+                    role = "insider"
+            name = _text(root, "rptOwnerName")
+            planned = _text(root, "aff10b5One").lower() in ("1", "true") or "10b5-1" in xml_text
+            totals: dict[str, list] = {}
+            for txn in root.iter():
+                if _local(txn.tag) != "nonDerivativeTransaction":
+                    continue
+                action = FORM4_ACTIONS.get(_text(txn, "transactionCode"))
+                if action is None:
+                    continue
+                values = totals.setdefault(action, [0.0, 0.0, False])
+                shares = _float(_text(txn, "transactionShares"))
+                price = _float(_text(txn, "transactionPricePerShare"))
+                values[0] += shares
+                values[1] += shares * price
+                if action == "sell":
+                    ids = [el.get("id", "") for el in txn.iter() if _local(el.tag) == "footnoteId"]
+                    values[2] = values[2] or _is_tax_sale(_footnotes(root, ids))
+            for action, values in totals.items():
+                trades.append(
+                    InsiderTrade(
+                        symbol=symbol,
+                        name=name,
+                        role=role,
+                        action=action,
+                        shares=values[0],
+                        usd=values[1],
+                        planned=planned,
+                        tax=bool(values[2]) if action == "sell" else False,
+                        filed_on=filing.filed_on,
+                        accession=filing.accession,
+                    )
+                )
+        return trades
 
     @staticmethod
     def _parse_form4(

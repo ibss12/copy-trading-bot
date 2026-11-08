@@ -1,16 +1,19 @@
 import logging
+from collections.abc import Callable
 from collections import defaultdict
 from datetime import date, timedelta
+from typing import TypeVar
 
 import config
 from signals.bargo import bargo_congress_signals
-from signals.models import TraderSignal
+from signals.models import InsiderTrade, TraderSignal
 from signals.quiver import congress_signals
 from signals.sec_edgar import SecEdgarClient
 
 logger = logging.getLogger(__name__)
 
 MAX_FORM4_FILINGS_PER_FILER = 150
+T = TypeVar("T")
 
 
 class SignalFeed:
@@ -41,7 +44,7 @@ class SignalFeed:
         return [s for s in self.tradable(as_of, lookback_days) if s.symbol == symbol]
 
 
-def _collect(name: str, fetch) -> list[TraderSignal]:
+def _collect(name: str, fetch: Callable[[], list[T]]) -> list[T]:
     try:
         signals = fetch()
     except Exception as exc:  # one broken/unreachable source must not stop the bot
@@ -109,6 +112,23 @@ def load_signal_feed(watchlist: list[str], since: date) -> SignalFeed:
             )
 
     return SignalFeed(signals)
+
+
+def load_insider_activity(watchlist: list[str], since: date) -> list[InsiderTrade]:
+    """Load every recent open-market Form 4 buy and sale for the watchlist."""
+    sec = SecEdgarClient(config.CACHE_DIR, config.SEC_USER_AGENT, config.OPENFIGI_API_KEY)
+    issuer_ciks = sec.issuer_ciks()
+    trades = []
+    for symbol in watchlist:
+        cik = issuer_ciks.get(symbol.upper())
+        if cik is None:
+            continue
+        trades += _collect(
+            f"{symbol} insider activity",
+            lambda cik=cik: sec.form4_activity(cik, since, MAX_FORM4_FILINGS_PER_FILER),
+        )
+    wanted = {symbol.upper() for symbol in watchlist}
+    return [trade for trade in trades if trade.symbol.upper() in wanted]
 
 
 def _collect_issuer_ciks(sec: SecEdgarClient) -> dict[str, int]:
