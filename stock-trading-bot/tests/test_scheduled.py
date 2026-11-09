@@ -63,6 +63,7 @@ SETTINGS = {
     "FOLLOW_EXPANDS_WATCHLIST": True,
     "REQUIRE_SMA_CONFIRMATION": True,
     "INSIDER_DAILY_SUMMARY": True,
+    "WEEKLY_SCORECARD": True,
 }
 
 
@@ -79,14 +80,14 @@ class ScheduledTestCase(ServerTestCase):
         self.notifier = Capture()
         self.state_path = self.tmp / "state.json"
 
-    def check(self, closes=None, now=NOW, session=OPEN, trade=True, feed=None, insider_loader=None):
+    def check(self, closes=None, now=NOW, session=OPEN, trade=True, feed=None, insider_loader=None, session_for=None):
         closes = closes or {}
         return ScheduledCheck(
             self.notifier,
             self.profile if trade else None,
             now=now,
             state_path=self.state_path,
-            session_for=lambda day: session,
+            session_for=session_for or (lambda day: session),
             closes_for=lambda symbol: closes.get(symbol, FLAT),
             feed_loader=lambda watchlist, since: feed or SignalFeed([]),
             fx=lambda currency: 1.0,
@@ -216,6 +217,7 @@ class TradingTest(ScheduledTestCase):
         self.check({"AAPL": GOLDEN}, session=CLOSED, now=NOW + timedelta(minutes=30)).run()
         self.assertEqual(self.fake.posts, [])
         self.assertEqual(len(self.sent("Daily summary")), 1)
+        self.assertEqual(self.sent("Weekly scorecard"), [], "Wednesday is not the last trading day of the week")
 
     def test_holiday_does_nothing(self):
         self.check({"AAPL": GOLDEN}, session=None).run()
@@ -511,6 +513,70 @@ class PlanNextTest(unittest.TestCase):
                 self.assertEqual(run_scheduled.main(), 0)
             fallback = datetime.fromisoformat(stdout.getvalue().strip())
             self.assertAlmostEqual((fallback - before).total_seconds(), 15 * 60, delta=2)
+
+
+FRIDAY = date(2026, 10, 2)
+
+
+def week_series(*prices: float) -> list[tuple[date, float]]:
+    return [(FRIDAY - timedelta(days=len(prices) - 1 - i), p) for i, p in enumerate(prices)]
+
+
+def weekday_session(day: date) -> Session | None:
+    if day.weekday() >= 5:
+        return None
+    start = datetime(day.year, day.month, day.day, 13, 30, tzinfo=timezone.utc)
+    return Session(start, start + timedelta(hours=6, minutes=30))
+
+
+class WeeklyScorecardTest(ScheduledTestCase):
+    FRI = weekday_session(FRIDAY)
+    AFTER_CLOSE = FRI.close + SUMMARY_DELAY + timedelta(minutes=1)
+
+    def run_at(self, closes, now, **kwargs):
+        closes = {"SPY": week_series(100, 100, 100, 100, 100, 100, 102), **closes}
+        self.check(closes, now=now, session_for=kwargs.pop("session_for", weekday_session), **kwargs).run()
+
+    def scorecards(self) -> list[str]:
+        return [b for t, b in zip(self.notifier.sent, self.notifier.bodies) if t.startswith("Weekly scorecard")]
+
+    def test_friday_scorecard_once(self):
+        self.run_at({"AAPL": week_series(10, 10, 10, 9, 12)}, self.FRI.open + timedelta(minutes=30))
+        self.fake.fill(self.fake.pending[0]["id"], price=12.0)
+        self.run_at({"AAPL": week_series(10, 10, 12, 13, 16)}, self.FRI.open + timedelta(minutes=60))
+        self.fake.fill(self.fake.pending[-1]["id"], price=16.0)
+        self.run_at({"AAPL": week_series(10, 10, 12, 13, 16)}, self.AFTER_CLOSE)
+        self.run_at({"AAPL": week_series(10, 10, 12, 13, 16)}, self.AFTER_CLOSE + timedelta(minutes=30))
+
+        cards = self.scorecards()
+        self.assertEqual(len(cards), 1)
+        self.assertIn("Weekly scorecard: week of 28 Sep", self.notifier.sent)
+        card = cards[0]
+        self.assertIn("S&P 500 (SPY) this week: +2.0%", card)
+        self.assertIn("Bot sold 1 this week: 1 won, 0 lost", card)
+        self.assertIn("AAPL +33.3%", card)
+        self.assertIn("take-profit", card)
+        self.assertIn("Bot bought: AAPL", card)
+        self.assertIn("All time: 1 sells, 100% won", card)
+        self.assertLessEqual(len(card), MAX_DESCRIPTION)
+
+    def test_thursday_when_friday_is_a_holiday(self):
+        thursday = FRIDAY - timedelta(days=1)
+
+        def holiday_friday(day):
+            return None if day == FRIDAY else weekday_session(day)
+
+        self.run_at(
+            {}, weekday_session(thursday).close + SUMMARY_DELAY + timedelta(minutes=1), session_for=holiday_friday
+        )
+        self.assertEqual(len(self.scorecards()), 1)
+        self.assertIn("Bot sold nothing this week.", self.scorecards()[0])
+
+    def test_can_be_turned_off(self):
+        with mock.patch.object(config, "WEEKLY_SCORECARD", False):
+            self.run_at({}, self.AFTER_CLOSE)
+        self.assertEqual(self.scorecards(), [])
+        self.assertEqual(len(self.sent("Daily summary")), 1)
 
 
 if __name__ == "__main__":

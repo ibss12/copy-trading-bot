@@ -408,6 +408,11 @@ loss limit, problems such as a wrong key (once a day), and a summary after the c
 digest includes open-market Form 4 buys and sells by anyone at watchlist companies; 10b5-1 planned
 sales and tax-withholding sales are included but labelled.
 
+After the last trading day of each week (`WEEKLY_SCORECARD=true` by default) you also get a weekly
+scorecard: the S&P 500's move that week, your account's move, every bot sell with its profit or loss
+and why it sold, what the bot bought, how its current holdings compare with what it paid, and its
+all-time win rate.
+
 **1. Make a Discord channel link (webhook).** In the Discord app (a computer or phone browser is
 easiest): create a server for yourself (**+** &rarr; *Create My Own*) or use one you own. Next to a
 text channel tap the gear (*Edit Channel*) &rarr; **Integrations** &rarr; **Webhooks** &rarr;

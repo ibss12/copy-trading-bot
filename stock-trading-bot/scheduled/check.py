@@ -39,6 +39,8 @@ INACTIVE_WARNING_DAYS = 50
 GITHUB_INACTIVE_LIMIT_DAYS = 60
 MAX_FILING_NOTICES = 8
 FILING_KEEP_EXTRA_DAYS = 7
+TRADE_LOG_LIMIT = 1000
+SCORECARD_BENCHMARK = "SPY"
 
 Closes = list[tuple[date, float]]
 
@@ -125,6 +127,19 @@ def usd_rate(currency: str) -> float:
     return float(yf.Ticker(f"{currency}USD=X").fast_info["last_price"])
 
 
+def _week(day: date) -> str:
+    year, week, _ = day.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _profit(trade: dict) -> float:
+    return (trade["price"] - trade["entry"]) * trade["qty"]
+
+
+def _signed_usd(value: float) -> str:
+    return f"{'+' if value >= 0 else '-'}{_usd_short(value)}"
+
+
 def _parse_time(raw: str) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
@@ -201,12 +216,15 @@ class ScheduledCheck:
 
     def _start_day(self) -> None:
         state = self.state
-        for key in ("open_orders", "uncertain", "trades_today"):
+        for key in ("open_orders", "uncertain", "trades_today", "trade_log"):
             state.setdefault(key, [])
         for key in ("advice", "errors", "moves", "positions"):
             state.setdefault(key, {})
         if state.get("day") == self.today.isoformat():
             return
+        week = _week(self.today)
+        if state.get("week") != week:
+            state.update(week=week, week_start_value=state.get("last_close_value"))
         state.update(
             day=self.today.isoformat(),
             day_start_value=state.get("last_close_value"),
@@ -282,6 +300,8 @@ class ScheduledCheck:
             self._summary(account, advice)
             if config.INSIDER_DAILY_SUMMARY:
                 self._insider_digest()
+            if config.WEEKLY_SCORECARD and self._last_session_of_week():
+                self._scorecard(account, closes)
 
     # ------------------------------------------------------------------ messages
     def _welcome(self) -> None:
@@ -498,6 +518,73 @@ class ScheduledCheck:
         body = render(n)
         self.notifier.add("info", f"Insider trades: {weekday}", body)
 
+    def _last_session_of_week(self) -> bool:
+        for days_ahead in range(1, 8):
+            day = self.today + timedelta(days=days_ahead)
+            if _week(day) != _week(self.today):
+                return True
+            if self.session_for(day):
+                return False
+        return True
+
+    def _scorecard(self, account: Account | None, closes: dict[str, Closes]) -> None:
+        """Friday (last session of the week) report: the bot's trades and results versus the S&P 500."""
+        week = _week(self.today)
+        if self.state.get("scorecard_week") == week:
+            return
+        self.state["scorecard_week"] = week
+        monday = self.today - timedelta(days=self.today.weekday())
+        lines = []
+        try:
+            spy = closes.get(SCORECARD_BENCHMARK) or self.closes_for(SCORECARD_BENCHMARK)
+            before = [c for d, c in spy if d < monday]
+            if before and spy:
+                lines.append(f"S&P 500 ({SCORECARD_BENCHMARK}) this week: {(spy[-1][1] / before[-1] - 1) * 100:+.1f}%")
+        except Exception as exc:
+            logger.warning("No %s prices for the scorecard: %s", SCORECARD_BENCHMARK, exc)
+        start = self.state.get("week_start_value")
+        if account and start:
+            lines.append(
+                f"Account {self.account_label} this week: {(account.total / start - 1) * 100:+.1f}% "
+                "(includes your own shares)"
+            )
+
+        log = self.state.get("trade_log") or []
+        this_week = [t for t in log if t["day"] >= monday.isoformat()]
+        sells = [t for t in this_week if t["side"] == "sell" and t.get("entry")]
+        buys = sorted({t["symbol"] for t in this_week if t["side"] == "buy"})
+        if sells:
+            wins = sum(1 for t in sells if t["price"] > t["entry"])
+            lines.append(
+                f"Bot sold {len(sells)} this week: {wins} won, {len(sells) - wins} lost, "
+                f"total {_signed_usd(sum(_profit(t) for t in sells))}"
+            )
+            for t in sorted(sells, key=_profit, reverse=True):
+                why = (t.get("reason") or "").split(":")[0]
+                lines.append(
+                    f"- {t['symbol']} {(t['price'] / t['entry'] - 1) * 100:+.1f}% ({_signed_usd(_profit(t))}), {why}"
+                )
+        else:
+            lines.append("Bot sold nothing this week.")
+        lines.append(f"Bot bought: {', '.join(buys)}" if buys else "Bot bought nothing this week.")
+
+        holding = []
+        for symbol, row in sorted(self.state.get("positions", {}).items()):
+            series = closes.get(symbol)
+            if series and row.get("entry"):
+                holding.append(f"{symbol} {(series[-1][1] / row['entry'] - 1) * 100:+.1f}%")
+        if holding:
+            lines.append("Still holding (vs what the bot paid): " + ", ".join(holding))
+
+        closed = [t for t in log if t["side"] == "sell" and t.get("entry")]
+        if closed:
+            won = sum(1 for t in closed if t["price"] > t["entry"])
+            lines.append(
+                f"All time: {len(closed)} sells, {won / len(closed):.0%} won, "
+                f"total {_signed_usd(sum(_profit(t) for t in closed))}"
+            )
+        self.notifier.add("info", f"Weekly scorecard: week of {monday.strftime('%d %b')}", "\n".join(lines))
+
     def _inactivity_warning(self) -> str:
         pushed = _parse_time(self.repo_pushed_at)
         if pushed is None:
@@ -596,6 +683,8 @@ class ScheduledCheck:
         if filled > 0:
             before = self.ledger.bot_shares().get(symbol, 0.0)
             if self.ledger.apply_fill(entry["id"], symbol, filled if side == "buy" else -filled):
+                bought_at = (self.state["positions"].get(symbol) or {}).get("entry")
+                self._log_trade(symbol, side, filled, price, bought_at if side == "sell" else None, entry)
                 self._track_fill(symbol, side, before, filled, price)
                 verb = "bought" if side == "buy" else "sold"
                 text = f"{verb} {filled:g} {symbol} at ${price:,.2f}"
@@ -611,6 +700,15 @@ class ScheduledCheck:
             self.notifier.add("danger", f"Trading 212 did not fill the bot's {side.upper()} {symbol} order", status)
 
     # ------------------------------------------------------------------ trading
+    def _log_trade(
+        self, symbol: str, side: str, qty: float, price: float, bought_at: float | None, order: dict
+    ) -> None:
+        row = {"day": self.today.isoformat(), "symbol": symbol, "side": side, "qty": qty, "price": price}
+        if bought_at:
+            row["entry"] = bought_at
+        row["reason"] = order.get("reason", "")
+        self.state["trade_log"] = (self.state.get("trade_log") or [])[-(TRADE_LOG_LIMIT - 1) :] + [row]
+
     def _track_fill(self, symbol: str, side: str, before: float, filled: float, price: float) -> None:
         """Entry price of the bot's shares (average of its buys); forgotten once they are all sold."""
         positions = self.state["positions"]
