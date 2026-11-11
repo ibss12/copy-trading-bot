@@ -216,7 +216,7 @@ class ScheduledCheck:
 
     def _start_day(self) -> None:
         state = self.state
-        for key in ("open_orders", "uncertain", "trades_today", "trade_log"):
+        for key in ("open_orders", "uncertain", "trades_today", "trade_log", "sold_today"):
             state.setdefault(key, [])
         for key in ("advice", "errors", "moves", "positions"):
             state.setdefault(key, {})
@@ -230,6 +230,7 @@ class ScheduledCheck:
             day_start_value=state.get("last_close_value"),
             moves={},
             trades_today=[],
+            sold_today=[],
             errors={},
         )
 
@@ -813,6 +814,11 @@ class ScheduledCheck:
             if decision.action == "sell":
                 if self._submit(symbol, account.bot.get(symbol, 0.0), "sell", signal.price, decision.reason):
                     busy[symbol] = "sell"
+                    if symbol not in self.state["sold_today"]:
+                        self.state["sold_today"].append(symbol)
+                continue
+            if symbol in self.state["sold_today"]:
+                logger.info("Skip buy %s: sold earlier today", symbol)
                 continue
             if halted:
                 logger.info("Skip buy %s: daily loss limit reached", symbol)

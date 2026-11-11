@@ -119,6 +119,34 @@ class TradingTest(ScheduledTestCase):
         self.assertEqual(len(self.fake.posts), 1, "already holds it: no new buy")
         self.assertEqual(len(self.sent("Stock bot is connected")), 1)
 
+    def test_sale_blocks_same_day_rebuy_but_resets_next_day(self):
+        self.fake.positions["AAPL_US_EQ"] = 3
+        self.bot_ledger.apply_fill("old", "AAPL", 3)
+        below_short_sma = series(100, 100, 100, 100, 99)
+
+        self.check({"AAPL": below_short_sma}).run()
+        self.assertEqual(
+            self.fake.posts,
+            [{"ticker": "AAPL_US_EQ", "quantity": -3, "extendedHours": False}],
+        )
+        self.assertEqual(json.loads(self.state_path.read_text())["sold_today"], ["AAPL"])
+        self.fake.fill(self.fake.pending[0]["id"], price=99)
+
+        self.check({"AAPL": GOLDEN}, now=NOW + timedelta(minutes=30)).run()
+        self.assertEqual(len(self.fake.posts), 1, "a sold symbol cannot be bought again the same day")
+
+        next_day = NOW + timedelta(days=1)
+        next_session = Session(next_day - timedelta(minutes=29), next_day + timedelta(hours=6))
+        self.check({"AAPL": GOLDEN}, now=next_day, session=next_session).run()
+        self.assertEqual(
+            self.fake.posts,
+            [
+                {"ticker": "AAPL_US_EQ", "quantity": -3, "extendedHours": False},
+                {"ticker": "AAPL_US_EQ", "quantity": 83, "extendedHours": False},
+            ],
+        )
+        self.assertEqual(json.loads(self.state_path.read_text())["sold_today"], [])
+
     def test_never_sells_your_own_shares(self):
         self.fake.positions["AAPL_US_EQ"] = 5
         self.check({"AAPL": DEATH}).run()

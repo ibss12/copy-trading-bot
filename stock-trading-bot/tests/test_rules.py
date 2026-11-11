@@ -84,6 +84,20 @@ class ExitDecisionTest(unittest.TestCase):
 
 
 class EntryFilterTest(unittest.TestCase):
+    def test_exit_below_short_sma_blocks_new_buys(self):
+        below = signal(price=94.0, short_sma=95.0, long_sma=90.0, crossed_up=True)
+        rules = TradeRules()
+        self.assertEqual(entry_blocked(below, rules), "price 94.00 below short SMA 95.00")
+        self.assertIsNone(sma_decision(below, False, True, None, rules))
+        self.assertIsNone(smart_money_decision(below, False, True, 1, True, nobody, None, rules))
+
+    def test_exit_below_short_sma_does_not_block_when_disabled(self):
+        below = signal(price=94.0, short_sma=95.0, long_sma=90.0, crossed_up=True)
+        rules = TradeRules(exit_below_short_sma=False)
+        self.assertIsNone(entry_blocked(below, rules))
+        self.assertEqual(sma_decision(below, False, True, None, rules).action, "buy")
+        self.assertEqual(sma_decision(below, False, True).action, "buy")
+
     def test_rsi_filter_blocks_overbought_buys(self):
         rules = TradeRules(rsi_max_for_entry=70)
         hot = signal(crossed_up=True, rsi_value=75.0)
@@ -98,7 +112,7 @@ class EntryFilterTest(unittest.TestCase):
 
     def test_require_price_above_long_sma(self):
         rules = TradeRules(require_price_above_long_sma=True)
-        below = signal(price=89.0, short_sma=95, long_sma=90, crossed_up=True)
+        below = signal(price=95.0, short_sma=94, long_sma=96, crossed_up=True)
         self.assertIn("not above long SMA", entry_blocked(below, rules))
         self.assertIsNone(sma_decision(below, False, True, None, rules))
         self.assertEqual(sma_decision(below, False, True, None, TradeRules()).action, "buy")

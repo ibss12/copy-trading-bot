@@ -126,6 +126,8 @@ def exit_decision(signal: SmaSignal, position: PositionState | None, rules: Trad
 
 def entry_blocked(signal: SmaSignal, rules: TradeRules) -> str | None:
     """Why a buy is not allowed right now, or None if the entry filters pass."""
+    if rules.exit_below_short_sma and signal.price < signal.short_sma:
+        return f"price {signal.price:.2f} below short SMA {signal.short_sma:.2f}"
     if rules.require_price_above_long_sma and signal.price <= signal.long_sma:
         return f"price {signal.price:.2f} not above long SMA {signal.long_sma:.2f}"
     if rules.rsi_max_for_entry is not None and signal.rsi is not None and signal.rsi > rules.rsi_max_for_entry:
