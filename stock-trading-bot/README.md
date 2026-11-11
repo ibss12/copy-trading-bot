@@ -89,6 +89,7 @@ price since buying. Set a percentage to `0` or `off` to turn that rule off.
 | `EXIT_BELOW_SHORT_SMA` | `true` | price closes below the short SMA (e.g. the 20-day average) | |
 
 The SMA bearish crossover (and, in `smart_money`, followed traders selling) still sells too.
+When below-short-SMA exits are enabled, buys below the short SMA are blocked, and a symbol the bot sells cannot be bought again until the next trading day.
 
 **When to buy (entry filters).** Extra checks before any buy:
 
