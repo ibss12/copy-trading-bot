@@ -12,6 +12,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 MAX_EMBEDS_PER_MESSAGE = 10
+MAX_MESSAGE_CHARS = 6000
 MAX_TITLE = 256
 MAX_DESCRIPTION = 4000
 MAX_RETRIES = 3
@@ -60,11 +61,25 @@ class DiscordNotifier:
                 print(f"[{notice.level}] {notice.title}" + (f"\n    {notice.body}" if notice.body else ""))
             return 0
         sent = 0
-        for start in range(0, len(notices), MAX_EMBEDS_PER_MESSAGE):
-            batch = notices[start : start + MAX_EMBEDS_PER_MESSAGE]
+        batches = []
+        batch = []
+        batch_chars = 0
+        for notice in notices:
+            embed = self.embed(notice)
+            embed_chars = len(embed["title"]) + len(embed.get("description", ""))
+            if batch and (len(batch) >= MAX_EMBEDS_PER_MESSAGE or batch_chars + embed_chars > MAX_MESSAGE_CHARS):
+                batches.append(batch)
+                batch = []
+                batch_chars = 0
+            batch.append(embed)
+            batch_chars += embed_chars
+        if batch:
+            batches.append(batch)
+
+        for batch in batches:
             payload = {
                 "username": self.username,
-                "embeds": [self.embed(n) for n in batch],
+                "embeds": batch,
                 "allowed_mentions": {"parse": []},
             }
             if self._post(payload):
