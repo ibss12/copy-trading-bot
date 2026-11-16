@@ -37,7 +37,6 @@ SUMMARY_DELAY = timedelta(minutes=5)
 MAX_CHAIN_SLEEP = timedelta(hours=5, minutes=30)
 INACTIVE_WARNING_DAYS = 50
 GITHUB_INACTIVE_LIMIT_DAYS = 60
-MAX_FILING_NOTICES = 8
 FILING_KEEP_EXTRA_DAYS = 7
 TRADE_LOG_LIMIT = 1000
 SCORECARD_BENCHMARK = "SPY"
@@ -344,7 +343,7 @@ class ScheduledCheck:
                     f"Most recent:\n{recent}\nFrom now on you'll get a message for each new one.",
                 )
             seen = {}
-        for signal in fresh[:MAX_FILING_NOTICES]:
+        for signal in fresh:
             verb = "bought" if signal.action == "buy" else "sold"
             self.notifier.add(
                 "success" if signal.action == "buy" else "warning",
@@ -354,8 +353,6 @@ class ScheduledCheck:
                 + (f"\nWhy: {signal.reason}" if signal.reason else "")
                 + ("\nFor your info only: the bot doesn't trade on this one." if signal.notify_only else ""),
             )
-        if len(fresh) > MAX_FILING_NOTICES:
-            self.notifier.add("info", f"...and {len(fresh) - MAX_FILING_NOTICES} more new big-trader filings")
         keep_after = (self.today - timedelta(days=config.SIGNAL_LOOKBACK_DAYS + FILING_KEEP_EXTRA_DAYS)).isoformat()
         seen.update({s.describe(): s.disclosed_on.isoformat() for s in active})
         self.state["seen_signals"] = {k: d for k, d in seen.items() if d >= keep_after}
@@ -487,16 +484,11 @@ class ScheduledCheck:
             parts = []
             if buys:
                 buyers = list(dict.fromkeys((trade.name or "Unknown insider", trade.role) for trade in buys))
-                who = ", ".join(f"{name}, {role}" for name, role in buyers[:2])
-                if len(buyers) > 2:
-                    who += f", +{len(buyers) - 2} more"
+                who = "; ".join(f"{name}, {role}" for name, role in buyers)
                 parts.append(f"BOUGHT {_usd_short(sum(trade.usd for trade in buys))} ({who})")
             if sells:
                 sellers = list(dict.fromkeys((trade.name or "Unknown insider", trade.role) for trade in sells))
-                if len(sellers) == 1:
-                    who = f"{sellers[0][0]}, {sellers[0][1]}"
-                else:
-                    who = f"{len(sellers)} people"
+                who = "; ".join(f"{name}, {role}" for name, role in sellers)
                 counts = []
                 planned = sum(trade.planned for trade in sells)
                 tax = sum(trade.tax for trade in sells)
@@ -508,16 +500,31 @@ class ScheduledCheck:
                 parts.append(f"SOLD {_usd_short(sum(trade.usd for trade in sells))} by {who}{qualifier}")
             stock_lines.append(f"{symbol}: " + " · ".join(parts))
 
-        def render(n):
-            shown = stock_lines[:n]
-            extra = len(stock_lines) - n
-            return "\n".join([*shown, *([f"...and {extra} more stocks"] if extra else []), legend])
+        pages = []
+        page = []
+        for line in stock_lines:
+            line = line[:MAX_DESCRIPTION]
+            if page and len("\n".join([*page, line])) > MAX_DESCRIPTION:
+                pages.append(page)
+                page = []
+            page.append(line)
+        if page:
+            pages.append(page)
+        if not pages:
+            pages.append([])
+        if len("\n".join([*pages[-1], legend])) <= MAX_DESCRIPTION:
+            pages[-1].append(legend)
+        else:
+            pages.append([legend])
 
-        n = min(25, len(stock_lines))
-        while n > 0 and len(render(n)) > MAX_DESCRIPTION:
-            n -= 1
-        body = render(n)
-        self.notifier.add("info", f"Insider trades: {weekday}", body)
+        page_count = len(pages)
+        for page_number, page in enumerate(pages, start=1):
+            suffix = f" ({page_number}/{page_count})" if page_count > 1 else ""
+            self.notifier.add(
+                "info",
+                f"Insider trades: {weekday}{suffix}",
+                "\n".join(page),
+            )
 
     def _last_session_of_week(self) -> bool:
         for days_ahead in range(1, 8):

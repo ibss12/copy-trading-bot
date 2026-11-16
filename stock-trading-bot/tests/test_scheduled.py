@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 import config
-from notify.discord import MAX_DESCRIPTION, DiscordNotifier
+from notify.discord import MAX_DESCRIPTION, MAX_MESSAGE_CHARS, DiscordNotifier
 from scheduled.check import SUMMARY_DELAY, ScheduledCheck, Session, next_check_at
 from signals.feed import SignalFeed
 from signals.models import InsiderTrade, TraderSignal
@@ -292,6 +292,19 @@ class AlertsTest(ScheduledTestCase):
         self.assertEqual(self.sent("Warren Buffett"), [])
         self.assertEqual(len(self.sent("Nancy Pelosi sold AAPL")), 1)
 
+    def test_every_fresh_big_trader_filing_gets_a_notice(self):
+        config.STRATEGY = "smart_money"
+        self.state_path.write_text(json.dumps({"seen_signals": {}}))
+        signals = [
+            TraderSignal(f"Trader {i}", "13F", "AAPL", "buy", TODAY, TODAY, f"added position {i}") for i in range(12)
+        ]
+
+        self.check(feed=SignalFeed(signals), trade=False, session=None).run()
+
+        filing_titles = [title for title in self.notifier.sent if "bought AAPL" in title]
+        self.assertEqual(filing_titles, [f"Trader {i} bought AAPL" for i in range(12)])
+        self.assertFalse(any("...and" in title for title in self.notifier.sent))
+
     def test_other_insiders_are_announced_but_never_traded(self):
         config.STRATEGY = "smart_money"
         cfo = TraderSignal("Jane Doe (CFO)", "SEC Form 4", "AAPL", "buy", TODAY, TODAY, "bought", notify_only=True)
@@ -326,14 +339,41 @@ class AlertsTest(ScheduledTestCase):
         self.assertEqual(len(digests), 1)
         body = self.notifier.bodies[digests[0]]
         self.assertIn("AAPL: BOUGHT $2.0M (Jane Doe, CEO) · SOLD $500k by Planned Seller, CFO (1 pre-planned)", body)
-        self.assertIn("MSFT: SOLD $4k by 3 people (1 pre-planned, 1 tax)", body)
+        self.assertIn("MSFT: SOLD $4k by Seller, director; Planned, officer; Tax, insider (1 pre-planned, 1 tax)", body)
         self.assertIn("TSLA: SOLD $400 by Single seller, director", body)
         self.assertLess(body.index("AAPL:"), body.index("MSFT:"))
 
         self.check(trade=False, session=CLOSED, insider_loader=loader).run()
         self.assertEqual(len([title for title in self.notifier.sent if "Insider trades:" in title]), 1)
 
-    def test_daily_insider_digest_truncates_long_stock_lines_with_correct_count(self):
+    def test_daily_insider_digest_lists_all_buyers_and_sellers(self):
+        trades = [
+            InsiderTrade("MSFT", "Jane Doe", "CEO", "buy", 1, 100, False, False, TODAY, "b1"),
+            InsiderTrade("MSFT", "John Roe", "Director", "buy", 1, 200, False, False, TODAY, "b2"),
+            InsiderTrade("MSFT", "Alex Smith", "CFO", "buy", 1, 300, False, False, TODAY, "b3"),
+            InsiderTrade("MSFT", "Seller One", "CEO", "sell", 1, 200, False, False, TODAY, "s1"),
+            InsiderTrade("MSFT", "Seller Two", "Director", "sell", 1, 300, False, False, TODAY, "s2"),
+            InsiderTrade("MSFT", "Seller Three", "CFO", "sell", 1, 400, False, False, TODAY, "s3"),
+        ]
+        self.check(
+            trade=False,
+            session=CLOSED,
+            insider_loader=lambda watchlist, since: trades,
+        ).run()
+
+        body = self.notifier.bodies[self.notifier.sent.index("Insider trades: Wed 30 Sep")]
+        self.assertIn(
+            "BOUGHT $600 (Jane Doe, CEO; John Roe, Director; Alex Smith, CFO)",
+            body,
+        )
+        self.assertIn(
+            "SOLD $900 by Seller One, CEO; Seller Two, Director; Seller Three, CFO",
+            body,
+        )
+        self.assertNotIn("+1 more", body)
+        self.assertNotIn("3 people", body)
+
+    def test_daily_insider_digest_pages_all_long_stock_lines(self):
         trades = [
             InsiderTrade(
                 f"X{i:02}",
@@ -355,19 +395,31 @@ class AlertsTest(ScheduledTestCase):
             insider_loader=lambda watchlist, since: trades,
         ).run()
 
-        body = self.notifier.bodies[self.notifier.sent.index("Insider trades: Wed 30 Sep")]
+        digests = [
+            (title, body)
+            for title, body in zip(self.notifier.sent, self.notifier.bodies)
+            if title.startswith("Insider trades: Wed 30 Sep")
+        ]
+        page_count = len(digests)
+        self.assertGreater(page_count, 1)
+        self.assertEqual(
+            [title for title, _ in digests],
+            [f"Insider trades: Wed 30 Sep ({index}/{page_count})" for index in range(1, page_count + 1)],
+        )
         legend = (
             "Pre-planned = scheduled months ahead (10b5-1), usually less meaningful. "
             "Tax = shares sold to pay tax on vested stock."
         )
-        stock_lines = [line for line in body.splitlines() if line != legend and not line.startswith("...and ")]
-        omitted_line = next(line for line in body.splitlines() if line.startswith("...and "))
-        omitted = int(omitted_line.removeprefix("...and ").removesuffix(" more stocks"))
-
-        self.assertLessEqual(len(body), MAX_DESCRIPTION)
-        self.assertTrue(body.endswith(legend))
-        self.assertLessEqual(len(stock_lines), 25)
-        self.assertEqual(omitted, len(trades) - len(stock_lines))
+        lines = [line for _, body in digests for line in body.splitlines()]
+        self.assertTrue(all(len(body) <= MAX_DESCRIPTION for _, body in digests))
+        self.assertEqual(
+            [line.split(": ", 1)[0] for line in lines if line != legend],
+            [f"X{i:02}" for i in range(30)],
+        )
+        self.assertFalse(any(line.startswith("...and") for line in lines))
+        self.assertEqual(sum(body.count(legend) for _, body in digests), 1)
+        self.assertTrue(digests[-1][1].endswith(legend))
+        self.assertTrue(all(not body.endswith(legend) for _, body in digests[:-1]))
 
     def test_daily_insider_digest_first_run_shows_today_only_then_only_unseen(self):
         yesterday = TODAY - timedelta(days=1)
@@ -413,7 +465,7 @@ class DiscordNotifierTest(unittest.TestCase):
     def test_batches_and_retries_rate_limit(self):
         notifier = DiscordNotifier("https://discord.example/api/webhooks/1/abc")
         for i in range(12):
-            notifier.add("info", f"n{i}", "x" * 5000)
+            notifier.add("info", f"n{i}", "small")
         limited = mock.Mock(status_code=429)
         limited.json.return_value = {"retry_after": 0.01}
         ok = mock.Mock(status_code=200)
@@ -423,8 +475,43 @@ class DiscordNotifierTest(unittest.TestCase):
             self.assertEqual(notifier.flush(), 12)
         payloads = [c.kwargs["json"] for c in post.call_args_list]
         self.assertEqual([len(p["embeds"]) for p in payloads], [10, 10, 2])
-        self.assertLessEqual(len(payloads[0]["embeds"][0]["description"]), 4096)
         self.assertEqual(payloads[0]["allowed_mentions"], {"parse": []})
+
+    def test_twelve_small_notices_make_two_posts(self):
+        notifier = DiscordNotifier("https://discord.example/api/webhooks/1/abc", echo=False)
+        for i in range(12):
+            notifier.add("info", f"n{i}", "small")
+        ok = mock.Mock(status_code=200)
+        with mock.patch("notify.discord.requests.post", return_value=ok) as post:
+            self.assertEqual(notifier.flush(), 12)
+
+        payloads = [call.kwargs["json"] for call in post.call_args_list]
+        self.assertEqual(len(payloads), 2)
+        self.assertEqual([len(payload["embeds"]) for payload in payloads], [10, 2])
+
+    def test_long_notices_stay_under_message_character_limit(self):
+        notifier = DiscordNotifier("https://discord.example/api/webhooks/1/abc", echo=False)
+        for i in range(3):
+            notifier.add("info", f"n{i}", "x" * 3000)
+        ok = mock.Mock(status_code=200)
+        with mock.patch("notify.discord.requests.post", return_value=ok) as post:
+            self.assertEqual(notifier.flush(), 3)
+
+        payloads = [call.kwargs["json"] for call in post.call_args_list]
+        self.assertEqual(len(payloads), 3)
+        for payload in payloads:
+            total_chars = sum(
+                len(embed.get("title", "")) + len(embed.get("description", "")) for embed in payload["embeds"]
+            )
+            self.assertLessEqual(total_chars, MAX_MESSAGE_CHARS)
+
+    def test_flush_returns_only_delivered_notice_count(self):
+        notifier = DiscordNotifier("https://discord.example/api/webhooks/1/abc", echo=False)
+        for i in range(12):
+            notifier.add("info", f"n{i}", "small")
+        with mock.patch.object(notifier, "_post", side_effect=[True, False]) as post:
+            self.assertEqual(notifier.flush(), 10)
+        self.assertEqual([len(call.args[0]["embeds"]) for call in post.call_args_list], [10, 2])
 
     def test_without_webhook_nothing_is_sent(self):
         notifier = DiscordNotifier("", echo=False)
